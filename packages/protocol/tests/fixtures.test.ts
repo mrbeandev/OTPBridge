@@ -1,1 +1,35 @@
-import{beforeAll,expect,it}from'vitest';import fixture from'../fixtures/v1.json';import{ready,sessionKeys,decryptPair,decryptMessage,pairingSas,pairQrSchema}from'../src/index';beforeAll(()=>ready);it('matches deterministic public cross-language vectors',()=>{const q=pairQrSchema.parse(fixture.qr);expect(sessionKeys('browser',fixture.browser,fixture.phone.publicKey)).toEqual(fixture.browserKeys);expect(sessionKeys('phone',fixture.phone,fixture.browser.publicKey)).toEqual(fixture.phoneKeys);const response=decryptPair(q,JSON.stringify(fixture.pairEnvelope),fixture.now);expect(response).toEqual(fixture.response);expect(pairingSas(response)).toBe(fixture.sas);expect(decryptMessage(q.channelId,fixture.phoneKeys.rx,fixture.transport,fixture.now)).toEqual(fixture.request);});
+import { beforeAll, expect, it } from "vitest";
+import fixture from "../fixtures/v1.json";
+import {
+  ready,
+  sessionKeys,
+  decryptPair,
+  decryptMessage,
+  pairingSas,
+  pairQrSchema,
+} from "../src/index";
+beforeAll(() => ready);
+it("matches deterministic public cross-language vectors", () => {
+  const q = pairQrSchema.parse(fixture.qr);
+  expect(
+    sessionKeys("browser", fixture.browser, fixture.phone.publicKey),
+  ).toEqual(fixture.browserKeys);
+  expect(
+    sessionKeys("phone", fixture.phone, fixture.browser.publicKey),
+  ).toEqual(fixture.phoneKeys);
+  const response = decryptPair(
+    q,
+    JSON.stringify(fixture.pairEnvelope),
+    fixture.now,
+  );
+  expect(response).toEqual(fixture.response);
+  expect(pairingSas(response)).toBe(fixture.sas);
+  expect(
+    decryptMessage(
+      q.channelId,
+      fixture.phoneKeys.rx,
+      fixture.transport,
+      fixture.now,
+    ),
+  ).toEqual(fixture.request);
+});

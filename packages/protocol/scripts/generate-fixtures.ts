@@ -1,21 +1,108 @@
 // Public deterministic TEST keys only. Never use these values in a real pairing.
-import sodium from 'libsodium-wrappers-sumo';
-import {writeFileSync} from 'node:fs';
-import {ready,encode,sessionKeys,pairingSas} from '../src/index.ts';
+import sodium from "libsodium-wrappers-sumo";
+import { writeFileSync } from "node:fs";
+import { ready, encode, sessionKeys, pairingSas } from "../src/index.ts";
 await ready;
-const browser=sodium.crypto_kx_seed_keypair(new Uint8Array(32).fill(1));
-const phone=sodium.crypto_kx_seed_keypair(new Uint8Array(32).fill(2));
-const b={publicKey:encode(browser.publicKey),privateKey:encode(browser.privateKey)},p={publicKey:encode(phone.publicKey),privateKey:encode(phone.privateKey)};
-const channelId=encode(new Uint8Array(32).fill(3)),bootstrap=encode(new Uint8Array(32).fill(4)),phoneToken=encode(new Uint8Array(32).fill(5));
-const createdAt=1800000000000,expiresAt=createdAt+90000;
-const qr={type:'otpbridge.pair',v:1,relay:'https://relay.example',channelId,phoneToken,bootstrap,browserPublicKey:b.publicKey,browserName:'Test laptop',expiresAt:createdAt+300000};
-const response={type:'pair.response' as const,v:1 as const,channelId,browserPublicKey:b.publicKey,phonePublicKey:p.publicKey,browserName:qr.browserName,phoneName:'Test phone',expiresAt:qr.expiresAt};
-const bk=sessionKeys('browser',b,p.publicKey),pk=sessionKeys('phone',p,b.publicKey),nonce=encode(new Uint8Array(24).fill(6));
-const pairAad=`otpbridge:pair:1:${channelId}`;
-const pairCiphertext=encode(sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(JSON.stringify(response),pairAad,null,sodium.from_base64(nonce,sodium.base64_variants.URLSAFE_NO_PADDING),sodium.from_base64(bootstrap,sodium.base64_variants.URLSAFE_NO_PADDING)));
-const id=encode(new Uint8Array(32).fill(7)),requestId=encode(new Uint8Array(32).fill(8));
-const request={type:'fill.request',requestId,createdAt,expiresAt,browserName:qr.browserName,origin:'https://example.com',frameOrigin:'https://example.com'};
-const sessionAad=`otpbridge:session:1:${channelId}:${id}:${expiresAt}`;
-const ciphertext=encode(sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(JSON.stringify(request),sessionAad,null,sodium.from_base64(nonce,sodium.base64_variants.URLSAFE_NO_PADDING),sodium.from_base64(bk.tx,sodium.base64_variants.URLSAFE_NO_PADDING)));
-const fixture={warning:'PUBLIC TEST KEYS ONLY',now:createdAt+1000,browser:b,phone:p,browserKeys:bk,phoneKeys:pk,qr,response,sas:pairingSas(response),pairAad,pairEnvelope:{kind:'pair',v:1,nonce,ciphertext:pairCiphertext},sessionAad,request,transport:{sequence:1,id,expiresAt,payload:JSON.stringify({kind:'session',v:1,channelId,id,expiresAt,nonce,ciphertext})}};
-writeFileSync(new URL('../fixtures/v1.json',import.meta.url),JSON.stringify(fixture,null,2)+'\n');
+const browser = sodium.crypto_kx_seed_keypair(new Uint8Array(32).fill(1));
+const phone = sodium.crypto_kx_seed_keypair(new Uint8Array(32).fill(2));
+const b = {
+    publicKey: encode(browser.publicKey),
+    privateKey: encode(browser.privateKey),
+  },
+  p = {
+    publicKey: encode(phone.publicKey),
+    privateKey: encode(phone.privateKey),
+  };
+const channelId = encode(new Uint8Array(32).fill(3)),
+  bootstrap = encode(new Uint8Array(32).fill(4)),
+  phoneToken = encode(new Uint8Array(32).fill(5));
+const createdAt = 1800000000000,
+  expiresAt = createdAt + 90000;
+const qr = {
+  type: "otpbridge.pair",
+  v: 1,
+  relay: "https://relay.example",
+  channelId,
+  phoneToken,
+  bootstrap,
+  browserPublicKey: b.publicKey,
+  browserName: "Test laptop",
+  expiresAt: createdAt + 300000,
+};
+const response = {
+  type: "pair.response" as const,
+  v: 1 as const,
+  channelId,
+  browserPublicKey: b.publicKey,
+  phonePublicKey: p.publicKey,
+  browserName: qr.browserName,
+  phoneName: "Test phone",
+  expiresAt: qr.expiresAt,
+};
+const bk = sessionKeys("browser", b, p.publicKey),
+  pk = sessionKeys("phone", p, b.publicKey),
+  nonce = encode(new Uint8Array(24).fill(6));
+const pairAad = `otpbridge:pair:1:${channelId}`;
+const pairCiphertext = encode(
+  sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(
+    JSON.stringify(response),
+    pairAad,
+    null,
+    sodium.from_base64(nonce, sodium.base64_variants.URLSAFE_NO_PADDING),
+    sodium.from_base64(bootstrap, sodium.base64_variants.URLSAFE_NO_PADDING),
+  ),
+);
+const id = encode(new Uint8Array(32).fill(7)),
+  requestId = encode(new Uint8Array(32).fill(8));
+const request = {
+  type: "fill.request",
+  requestId,
+  createdAt,
+  expiresAt,
+  browserName: qr.browserName,
+  origin: "https://example.com",
+  frameOrigin: "https://example.com",
+};
+const sessionAad = `otpbridge:session:1:${channelId}:${id}:${expiresAt}`;
+const ciphertext = encode(
+  sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(
+    JSON.stringify(request),
+    sessionAad,
+    null,
+    sodium.from_base64(nonce, sodium.base64_variants.URLSAFE_NO_PADDING),
+    sodium.from_base64(bk.tx, sodium.base64_variants.URLSAFE_NO_PADDING),
+  ),
+);
+const fixture = {
+  warning: "PUBLIC TEST KEYS ONLY",
+  now: createdAt + 1000,
+  browser: b,
+  phone: p,
+  browserKeys: bk,
+  phoneKeys: pk,
+  qr,
+  response,
+  sas: pairingSas(response),
+  pairAad,
+  pairEnvelope: { kind: "pair", v: 1, nonce, ciphertext: pairCiphertext },
+  sessionAad,
+  request,
+  transport: {
+    sequence: 1,
+    id,
+    expiresAt,
+    payload: JSON.stringify({
+      kind: "session",
+      v: 1,
+      channelId,
+      id,
+      expiresAt,
+      nonce,
+      ciphertext,
+    }),
+  },
+};
+writeFileSync(
+  new URL("../fixtures/v1.json", import.meta.url),
+  JSON.stringify(fixture, null, 2) + "\n",
+);

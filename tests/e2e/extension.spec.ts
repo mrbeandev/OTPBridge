@@ -1,8 +1,57 @@
-import{test,expect,chromium}from'@playwright/test';import{resolve}from'node:path';import{mkdtemp,rm}from'node:fs/promises';import{tmpdir}from'node:os';
-test('MV3 worker initializes bundled crypto and setup UI without remote code',async()=>{
- const profile=await mkdtemp(resolve(tmpdir(),'otpbridge-browser-'));const extension=resolve('extension/dist');
- const context=await chromium.launchPersistentContext(profile,{channel:'chromium',headless:true,args:[`--disable-extensions-except=${extension}`,`--load-extension=${extension}`]});
- try{let[worker]=context.serviceWorkers();worker??=await context.waitForEvent('serviceworker');const id=new URL(worker.url()).host;const page=await context.newPage();const errors:string[]=[];page.on('pageerror',e=>{errors.push(e.message);console.error('EXTENSION ERROR:',e.message);});page.on('console',m=>{if(m.type()==='error')console.error('BROWSER:',m.text());});await page.goto(`chrome-extension://${id}/options.html`);await expect(page.getByRole('heading',{name:'OTPBridge',exact:true})).toBeVisible();await expect(page.getByRole('button',{name:'Create pairing QR'})).toBeVisible();await expect(page.getByText('Set up your relay and pair a phone.')).toBeVisible();
- const state=await worker.evaluate(async()=>{const chrome=(globalThis as any).chrome;return {level:await chrome.storage.local.get('state'),manifest:chrome.runtime.getManifest()};});expect(state.manifest.permissions).not.toContain('notifications');expect(state.manifest.permissions).not.toContain('tabs');expect(state.manifest.host_permissions).toBeUndefined();expect(errors).toEqual([]);
- }finally{await context.close();const absolute=resolve(profile);if(!absolute.startsWith(resolve(tmpdir(),'otpbridge-browser-')))throw new Error('Unexpected test profile path');await rm(absolute,{recursive:true,force:true});}
+import { test, expect, chromium } from "@playwright/test";
+import { resolve } from "node:path";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+test("MV3 worker initializes bundled crypto and setup UI without remote code", async () => {
+  const profile = await mkdtemp(resolve(tmpdir(), "otpbridge-browser-"));
+  const extension = resolve("extension/dist");
+  const context = await chromium.launchPersistentContext(profile, {
+    channel: "chromium",
+    headless: true,
+    args: [
+      `--disable-extensions-except=${extension}`,
+      `--load-extension=${extension}`,
+    ],
+  });
+  try {
+    let [worker] = context.serviceWorkers();
+    worker ??= await context.waitForEvent("serviceworker");
+    const id = new URL(worker.url()).host;
+    const page = await context.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", (e) => {
+      errors.push(e.message);
+      console.error("EXTENSION ERROR:", e.message);
+    });
+    page.on("console", (m) => {
+      if (m.type() === "error") console.error("BROWSER:", m.text());
+    });
+    await page.goto(`chrome-extension://${id}/options.html`);
+    await expect(
+      page.getByRole("heading", { name: "OTPBridge", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Create pairing QR" }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("Set up your relay and pair a phone."),
+    ).toBeVisible();
+    const state = await worker.evaluate(async () => {
+      const chrome = (globalThis as any).chrome;
+      return {
+        level: await chrome.storage.local.get("state"),
+        manifest: chrome.runtime.getManifest(),
+      };
+    });
+    expect(state.manifest.permissions).not.toContain("notifications");
+    expect(state.manifest.permissions).not.toContain("tabs");
+    expect(state.manifest.host_permissions).toBeUndefined();
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+    const absolute = resolve(profile);
+    if (!absolute.startsWith(resolve(tmpdir(), "otpbridge-browser-")))
+      throw new Error("Unexpected test profile path");
+    await rm(absolute, { recursive: true, force: true });
+  }
 });

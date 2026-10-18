@@ -16,6 +16,10 @@ playwright-report/
 test-results/
 
 # Android
+app/.inspection/
+app/.gradle-home/
+app/PROTOCOL-COORDINATION.md
+app/REVIEW-NOTES.md
 .gradle/
 .kotlin/
 **/build/

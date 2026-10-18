@@ -1,1 +1,25 @@
-{"name":"@otpbridge/extension","private":true,"version":"0.1.0","type":"module","scripts":{"build":"vite build","typecheck":"tsc --noEmit","test":"vitest run"},"dependencies":{"@otpbridge/protocol":"workspace:*","react":"^19.2.0","react-dom":"^19.2.0","qrcode":"^1.5.4"},"devDependencies":{"@types/chrome":"^0.1.37","@types/react":"^19.2.0","@types/react-dom":"^19.2.0","@types/qrcode":"^1.5.6","vite":"^6.4.1","jsdom":"^26.1.0"}}
+{
+  "name": "@otpbridge/extension",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@otpbridge/protocol": "workspace:*",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.1.37",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@types/qrcode": "^1.5.6",
+    "vite": "^6.4.1",
+    "jsdom": "^26.1.0"
+  }
+}

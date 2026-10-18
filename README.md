@@ -62,7 +62,23 @@ With minimal `activeTab` permissions, the **first** context-menu use on a docume
 
 ### Android
 
-The native application lives under `app/`, with a single module under `app/android/`. See `app/README.md` for SDK/build instructions and device-testing limitations once the native implementation is integrated.
+The native application lives under `app/`, with a single module under `app/android/`. See [Android build instructions](<app/README.md>) for SDK setup and deferred device-testing details.
+
+```sh
+cd app
+./gradlew :android:testDebugUnitTest :android:lintDebug :android:assembleDebug
+```
+
+The debug APK is produced at `app/android/build/outputs/apk/debug/android-debug.apk`. Building does not install it. Do not use real important accounts until physical-device validation and independent security review are complete.
+
+### Browser integration checks
+
+```sh
+pnpm exec playwright install chromium
+pnpm test:browser
+```
+
+The browser suite loads the actual MV3 bundle and exercises encrypted pairing, both SAS confirmations, lost-response retries, and guarded filling with a synthetic phone endpoint. Native permission prompts and OS shortcut delivery are simulated only in a disposable extension copy; actual user gestures and Android biometrics remain manual acceptance checks.
 
 ## Supported v1 behavior
 
@@ -83,4 +99,4 @@ Read [SECURITY.md](SECURITY.md) and the [wire protocol](packages/protocol/spec/w
 
 ## Project status
 
-Implemented components and exact validation results are tracked in release notes and CI. A successful build is not proof of real-device biometric behavior or production security. No store release or public hosted relay is included.
+Implemented components and deferred checks are tracked in the [release checklist](<RELEASE-CHECKLIST.md>). Local validation currently passes 27 JavaScript tests, 2 Chromium integration tests and 9 Android unit tests, plus TypeScript builds, Android lint and both APK builds. CI is configured but has not been run remotely. A successful build is not proof of real-device biometric behavior or production security. No store release or public hosted relay is included.

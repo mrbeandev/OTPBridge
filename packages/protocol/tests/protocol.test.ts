@@ -14,6 +14,8 @@ import {
   normalizeRelay,
   decode,
   encode,
+  idSchema,
+  pairResponseSchema,
   type PairQr,
   type PairResponse,
   type FillRequest,
@@ -43,6 +45,22 @@ function req(): FillRequest {
   };
 }
 describe("authenticated encrypted protocol", () => {
+  it("rejects noncanonical ID padding bits and invalid Unicode names", () => {
+    expect(() => idSchema.parse("A".repeat(42) + "B")).toThrow();
+    const s = setup();
+    expect(() =>
+      pairResponseSchema.parse({
+        type: "pair.response",
+        v: 1,
+        channelId: s.channel,
+        browserPublicKey: s.b.publicKey,
+        phonePublicKey: s.p.publicKey,
+        browserName: String.fromCharCode(0xd800),
+        phoneName: "Phone",
+        expiresAt: Date.now() + 1000,
+      }),
+    ).toThrow();
+  });
   it("derives matching directional keys and roundtrips", () => {
     const s = setup();
     expect(s.bk.tx).toBe(s.pk.rx);

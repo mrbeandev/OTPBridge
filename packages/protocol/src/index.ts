@@ -5,8 +5,25 @@ export const VERSION = 1;
 export const REQUEST_TTL = 90_000;
 export const PAIR_TTL = 300_000;
 export const MAX_PAYLOAD = 16_384;
-export const idSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
-const name = z.string().min(1).max(80);
+// Canonical 32-byte base64url: final symbol has two zero padding bits.
+export const idSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/);
+function validUnicode(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const c = value.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const next = value.charCodeAt(++i);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+    } else if (c >= 0xdc00 && c <= 0xdfff) return false;
+  }
+  return true;
+}
+const name = z
+  .string()
+  .min(1)
+  .max(80)
+  .refine(validUnicode, "Invalid Unicode name");
 const timestamp = z.number().int().nonnegative().safe();
 export function encode(bytes: Uint8Array): string {
   return sodium.to_base64(bytes, sodium.base64_variants.URLSAFE_NO_PADDING);
@@ -341,6 +358,34 @@ export function assertApproval(
   if (request.accountRef && request.accountRef !== response.accountRef)
     throw new Error("Account mismatch");
 }
+async function boundedResponseJson(response: Response): Promise<unknown> {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("Empty relay response");
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      size += value.length;
+      // 64 envelopes of up to 16KiB plus JSON escaping and metadata.
+      if (size > 2_200_000) {
+        await reader.cancel();
+        throw new Error("Relay response too large");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+}
 export class RelayClient {
   readonly relay: string;
   constructor(
@@ -368,11 +413,9 @@ export class RelayClient {
       },
     );
     if (!r.ok) throw new Error(`Relay error ${r.status}`);
-    return r.status === 204 ? undefined : r.json();
+    return r.status === 204 ? undefined : boundedResponseJson(r);
   }
-  static async create(
-    relay: string,
-  ): Promise<{
+  static async create(relay: string): Promise<{
     channelId: string;
     browserToken: string;
     phoneToken: string;
@@ -394,7 +437,7 @@ export class RelayClient {
         expiresAt: timestamp,
       })
       .strict()
-      .parse(await r.json());
+      .parse(await boundedResponseJson(r));
   }
   send(message: { id: string; expiresAt: number; payload: string }) {
     return this.call("/messages", {

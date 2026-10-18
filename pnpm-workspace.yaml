@@ -1,0 +1,7 @@
+packages:
+  - extension
+  - worker
+  - packages/*
+onlyBuiltDependencies:
+  - esbuild
+  - workerd

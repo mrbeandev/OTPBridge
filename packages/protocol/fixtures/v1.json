@@ -1,0 +1,65 @@
+{
+  "warning": "PUBLIC TEST KEYS ONLY",
+  "now": 1800000001000,
+  "browser": {
+    "publicKey": "qy_KMomDIsII-y2rUEi9Q8NVxkMPWIiXy1dJYc-pgG8",
+    "privateKey": "9Azq-G5XdpIzMrjY_TvvhJytsZxplrwnKvH2SNlWakw"
+  },
+  "phone": {
+    "publicKey": "_Dszk2elIl1TqS04AyOv0DXXgXttG-R9lG9rCanL3AY",
+    "privateKey": "2YGAh95yRKvBtfzyjlXkLH_5xnjAYFGB83rF10FKe5U"
+  },
+  "browserKeys": {
+    "rx": "4PSA1CzQ2KlZk91Ql2-yTvgaZ4i3tbxyL8JYQQrHI-0",
+    "tx": "Q-t0yEcgmjr1E-D8gkt5GGVmXcxyf8My9N38YU4Kt5o"
+  },
+  "phoneKeys": {
+    "rx": "Q-t0yEcgmjr1E-D8gkt5GGVmXcxyf8My9N38YU4Kt5o",
+    "tx": "4PSA1CzQ2KlZk91Ql2-yTvgaZ4i3tbxyL8JYQQrHI-0"
+  },
+  "qr": {
+    "type": "otpbridge.pair",
+    "v": 1,
+    "relay": "https://relay.example",
+    "channelId": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+    "phoneToken": "BQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU",
+    "bootstrap": "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+    "browserPublicKey": "qy_KMomDIsII-y2rUEi9Q8NVxkMPWIiXy1dJYc-pgG8",
+    "browserName": "Test laptop",
+    "expiresAt": 1800000300000
+  },
+  "response": {
+    "type": "pair.response",
+    "v": 1,
+    "channelId": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+    "browserPublicKey": "qy_KMomDIsII-y2rUEi9Q8NVxkMPWIiXy1dJYc-pgG8",
+    "phonePublicKey": "_Dszk2elIl1TqS04AyOv0DXXgXttG-R9lG9rCanL3AY",
+    "browserName": "Test laptop",
+    "phoneName": "Test phone",
+    "expiresAt": 1800000300000
+  },
+  "sas": "15976721",
+  "pairAad": "otpbridge:pair:1:AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+  "pairEnvelope": {
+    "kind": "pair",
+    "v": 1,
+    "nonce": "BgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYG",
+    "ciphertext": "A_FXcTuKDBBWZQQSmlWhDAOQ8OViFLxoubRGy6gEHqBPy9jImjvZSsDneKB_4t6HLl5n9eNHiBNneK0rMv0K5iJegDzCnyjOyXS9sqrUpQnycSI4xHhxf0g23iv1-LobqQYo_R479k7GDOfrABXXyKRXecP7S9jZ-VZIsg8_o8JUH6Z51HHMLjZZ6ViNHC5or0rMV-BMSHDVNlBFzC2Iu_6sr8bLuWx71dPytZglPJYjwOSvL09S4h5uRJVnUGRndw87kgEt1Fe0JhVru3bJZMWicTJpnHqZqiVhMGQmahGp28OZG56Hc9utKvTRXSRD5N-xB-ZRI56ONtS4Ss-iSlCTwbYKLP3EqGw3Idql_FEc-qJFoXarLwinRJJ5peSog8hoE2s389dYcg3xgYHvOznae2Px50c"
+  },
+  "sessionAad": "otpbridge:session:1:AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM:BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc:1800000090000",
+  "request": {
+    "type": "fill.request",
+    "requestId": "CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg",
+    "createdAt": 1800000000000,
+    "expiresAt": 1800000090000,
+    "browserName": "Test laptop",
+    "origin": "https://example.com",
+    "frameOrigin": "https://example.com"
+  },
+  "transport": {
+    "sequence": 1,
+    "id": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+    "expiresAt": 1800000090000,
+    "payload": "{\"kind\":\"session\",\"v\":1,\"channelId\":\"AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM\",\"id\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc\",\"expiresAt\":1800000090000,\"nonce\":\"BgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYG\",\"ciphertext\":\"OmmvBeyrx1I3DhNqD5TCmypdjGs9k6p90cDWpEGMjrEXfLMHujzgcptkzY5N9Gp6e85XLFUk1hCyDZmORV1BOucb06sTmiUidE6VQYRmoSLbsnaeAEJLkZPyjbAk5ys74SOWNuTaNT2BvPjoN-Xo8MuCV4awCdKQ4v9AsBinMGDO75wReHbA2pDezIeolHWFDdZoosxcSWfNbNRYy4KyjPgnKCTVPctHjOAmpyK1dbWATyq4dJje1c8MvubDnFqaJjAdWPviiHqyfwvLlmbFMibDMororqq0nYkvgdZZ9pvEW3XDBkutkMTx-YsULIt30qvZlw\"}"
+  }
+}

@@ -1,0 +1,1 @@
+{"name":"@otpbridge/protocol","private":true,"version":"0.1.0","type":"module","exports":"./src/index.ts","scripts":{"build":"tsc --noEmit","typecheck":"tsc --noEmit","test":"vitest run"},"dependencies":{"libsodium-wrappers-sumo":"0.8.4","zod":"^3.25.76"},"devDependencies":{"@types/libsodium-wrappers-sumo":"^0.7.8"}}

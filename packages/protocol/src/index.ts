@@ -101,20 +101,24 @@ export function assertApproval(request:FillRequest,response:FillApproved,now=Dat
   if(request.accountRef && request.accountRef!==response.accountRef) throw new Error('Account mismatch');
 }
 export class RelayClient {
-  constructor(readonly relay:string,readonly channelId:string,readonly token:string) {normalizeRelay(relay);idSchema.parse(channelId);idSchema.parse(token);}
+  readonly relay:string;
+  constructor(relay:string,readonly channelId:string,readonly token:string) {this.relay=normalizeRelay(relay);idSchema.parse(channelId);idSchema.parse(token);}
   private async call(path:string,init:RequestInit={}):Promise<any> {
     const r=await fetch(`${this.relay}/v1/channels/${this.channelId}${path}`,{...init,headers:{'Authorization':`Bearer ${this.token}`,'Content-Type':'application/json',...init.headers},signal:AbortSignal.timeout(12_000),cache:'no-store',redirect:'error'});
     if(!r.ok) throw new Error(`Relay error ${r.status}`);
     return r.status===204?undefined:r.json();
   }
-  static async create(relay:string):Promise<{channelId:string;browserToken:string;phoneToken:string}> {
+  static async create(relay:string):Promise<{channelId:string;browserToken:string;phoneToken:string;expiresAt:number}> {
     const r=await fetch(`${normalizeRelay(relay)}/v1/channels`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}',signal:AbortSignal.timeout(12_000),redirect:'error'});
     if(!r.ok) throw new Error(`Relay error ${r.status}`);
-    return z.object({channelId:idSchema,browserToken:idSchema,phoneToken:idSchema}).strict().parse(await r.json());
+    return z.object({channelId:idSchema,browserToken:idSchema,phoneToken:idSchema,expiresAt:timestamp}).strict().parse(await r.json());
   }
   send(message:{id:string;expiresAt:number;payload:string}) {return this.call('/messages',{method:'POST',body:JSON.stringify(message)});}
   async poll(after:number):Promise<{messages:TransportMessage[];cursor:number}> {
-    return z.object({messages:z.array(z.object({sequence:z.number().int().positive(),id:idSchema,expiresAt:timestamp,payload:z.string().max(MAX_PAYLOAD)}).strict()).max(64),cursor:z.number().int().nonnegative()}).strict().parse(await this.call(`/messages?after=${after}`));
+    const result=z.object({messages:z.array(z.object({sequence:z.number().int().positive().safe(),id:idSchema,expiresAt:timestamp,payload:z.string().max(MAX_PAYLOAD)}).strict()).max(64),cursor:z.number().int().nonnegative().safe()}).strict().parse(await this.call(`/messages?after=${after}`));
+    if(!Number.isSafeInteger(after)||after<0||result.cursor<after)throw new Error('Invalid cursor');
+    let previous=after;const ids=new Set<string>();for(const m of result.messages){if(m.sequence<=previous||m.sequence>result.cursor||ids.has(m.id))throw new Error('Invalid message ordering');previous=m.sequence;ids.add(m.id);}
+    return result;
   }
   activate(){return this.call('/activate',{method:'POST'});}
   revoke(){return this.call('',{method:'DELETE'});}

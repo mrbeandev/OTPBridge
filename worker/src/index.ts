@@ -15,15 +15,17 @@ export default {
         const allowed=await gate.fetch(new Request('https://internal/rate',{method:'POST'}));
         if(!allowed.ok)return json({error:'Enrollment rate limited'},429);
         const channelId=randomId(),browserToken=randomId(),phoneToken=randomId();
+        const expiresAt=Date.now()+300_000;
         const stub=env.MAILBOX.get(env.MAILBOX.idFromName(channelId));
-        const initialized=await stub.fetch(new Request('https://internal/init',{method:'POST',body:JSON.stringify({browserHash:await hash(browserToken),phoneHash:await hash(phoneToken)})}));
+        const initialized=await stub.fetch(new Request('https://internal/init',{method:'POST',body:JSON.stringify({browserHash:await hash(browserToken),phoneHash:await hash(phoneToken),expiresAt})}));
         if(!initialized.ok)return json({error:'Unavailable'},503);
-        return json({channelId,browserToken,phoneToken},201);
+        return json({channelId,browserToken,phoneToken,expiresAt},201);
       }
       const match=/^\/v1\/channels\/([^/]+)(\/messages|\/activate)?$/.exec(u.pathname);
       if(!match||!ID.test(match[1]!))return json({error:'Not found'},404);
       const suffix=match[2]??'';
       if(!((suffix==='/messages'&&['GET','POST'].includes(request.method))||(suffix==='/activate'&&request.method==='POST')||(!suffix&&request.method==='DELETE')))return json({error:'Method not allowed'},405);
+      if(!/^Bearer [A-Za-z0-9_-]{43}$/.test(request.headers.get('Authorization')??''))return json({error:'Unauthorized'},401);
       const stub=env.MAILBOX.get(env.MAILBOX.idFromName(match[1]!));
       const url=new URL(`https://internal${suffix||'/channel'}`);url.search=u.search;
       return await stub.fetch(new Request(url,request));

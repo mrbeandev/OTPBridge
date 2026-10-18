@@ -1,0 +1,46 @@
+# Security model and reporting
+
+## Development status
+
+OTPBridge is an early, unaudited implementation. Use test credentials only until independent review and physical-device acceptance testing are complete. Automated tests do not certify hardware-backed key behavior, browser integration, phishing resistance or absence of vulnerabilities.
+
+Do not include real TOTP seeds, codes, pairing QR screenshots, device tokens, extension storage dumps or decrypted payloads in issues. For a suspected vulnerability, use a private maintainer contact or GitHub private vulnerability reporting when the repository is published; there is not yet a public reporting address or response-time commitment.
+
+## Protected data
+
+- Android stores encrypted TOTP account records. The vault key is wrapped by an Android Keystore key requiring strong biometric-authorized key use.
+- Each approval requires a fresh biometric `CryptoObject` unwrap; a UI-only authentication flag is insufficient.
+- Android generates codes locally after approval. The extension receives a single current code, not the seed.
+- Pairing pins per-browser public keys. The one-time QR bootstrap authenticates the pairing transcript; both devices require matching eight-digit confirmation.
+- Directional libsodium `crypto_kx` session keys encrypt messages with XChaCha20-Poly1305. Random nonces and authenticated routing headers prevent silent envelope substitution.
+- Deadlines, request IDs, origin/account bindings and replay records are validated by endpoints, independently of relay behavior.
+
+## Untrusted relay
+
+A malicious Cloudflare account/operator can observe IP addresses, ciphertext size/timing, channel association, role and delivery attempts. It can drop, delay, replay or reorder traffic, exhaust quotas and deny service. It should not be able to read or modify authenticated request/response contents or substitute a paired endpoint key.
+
+There is **no forward secrecy**: compromising retained pairing private/session keys can expose previously recorded session ciphertext. Keys are not rotated by a ratchet. A relay compromise does not require abandoning the encrypted Android vault, but operators should replace transport credentials and investigate affected pairings.
+
+Transport bearer capabilities are separate from E2EE identities. Possessing a role token does not authorize an OTP approval but can permit mailbox access/denial of service. HTTPS is still mandatory. The QR includes the phone role token and must be kept secret.
+
+## Endpoint boundaries
+
+- A compromised/rooted phone or malicious application build can expose seeds and codes. Biometric/key protection is not a defense against all rooted-device attacks.
+- A compromised browser, extension update or browser profile can expose session keys and delivered codes. Browser keys are local extension storage, not hardware-protected secrets.
+- The destination website can read an OTP after insertion. TOTP can be phished and relayed in real time. Exact-origin mapping is a useful safeguard, not cryptographic origin-bound authentication. Prefer passkeys when available.
+- Page context-menu events must be trusted browser events; the extension must not expose a page-callable request API.
+- Destination identity is tab + frame + document + original field; navigation, replacement, user edits or lost focus cause fail-closed insertion.
+
+## Recovery and revocation
+
+Phone loss/uninstall/Keystore invalidation can destroy vault access. V1 deliberately has no cloud backup or export. Keep service recovery codes and/or another authenticator. Never encourage users to remove existing recovery methods.
+
+Revocation is authoritative on the phone: remove local trust before attempting network cleanup. A best-effort relay deletion does not replace local revocation. Re-pairing requires new explicit confirmation; never accept silently replaced keys.
+
+## Development controls
+
+Do not log payloads, OTPs, seeds, bearer tokens or QR contents. Disable platform backup for key/secret-bearing Android data. Do not sync extension keys with Chrome sync. Bundle dependencies; no remotely hosted code. Keep credentials out of URLs and version control. Any new push, export, caching or background feature needs a revised threat model and tests.
+
+## Release checks
+
+Run the full test/build suite, inspect dependencies/licenses and permissions, verify protocol vectors in both languages, test lifecycle/navigation/replay rejection, and perform real-device biometric/key-invalidation checks. An independent security review is required before claiming production-grade security.

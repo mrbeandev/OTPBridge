@@ -59,4 +59,10 @@ class AuthenticatorImportTest {
         assertEquals(Totp.generate(a, 30), Totp.generate(a.copy(secret = "jbsw y3dp ehpk 3pxp jbsw y3dp ehp"), 30))
         try { Totp.decodeBase32("JBSW"); fail() } catch (_: IllegalArgumentException) { }
     }
+    @Test fun ordersScreenshotsByEmbeddedPartRegardlessOfPickOrder() {
+        val part = { i: Int -> uri(otp(secret, "acct$i", "X") + num(3, 3) + num(4, i) + num(5, 9)) }
+        val plain = "otpauth://totp/P:q?secret=JBSWY3DPEHPK3PXP"
+        val ordered = AuthenticatorImport.orderByPart(listOf(part(2), plain, part(0), part(1)))
+        assertEquals(listOf(part(0), part(1), part(2), plain), ordered)
+    }
 }

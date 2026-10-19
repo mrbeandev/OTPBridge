@@ -61,6 +61,8 @@ class MainActivity : FragmentActivity() {
     private var importBatches by mutableStateOf<Set<Int>>(emptySet())
     private var importBatchSize by mutableIntStateOf(0)
     private var importExcluded by mutableStateOf<Set<Int>>(emptySet())
+    private var importImageResults by mutableStateOf<List<String>>(emptyList())
+    private var importDecoding by mutableStateOf(false)
     private var browserMenu by mutableStateOf<String?>(null)
     private var removeBrowser by mutableStateOf<JSONObject?>(null)
     private var sessionUnlocked by mutableStateOf(false)
@@ -102,6 +104,30 @@ class MainActivity : FragmentActivity() {
             } ?: throw IllegalStateException("Could not open file")
             addImport(text, "file")
         } catch (e: Exception) { status = "Could not read import file: ${e.message ?: "unknown error"}" }
+    }
+    private val pickQrImages = registerForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(20)) { uris ->
+        if (uris.isEmpty()) return@registerForActivityResult
+        importDecoding = true
+        lifecycleScope.launch {
+            // Decode off the main thread; secrets stay in memory only.
+            val decoded = withContext(Dispatchers.Default) { uris.mapIndexed { i, uri -> i to runCatching { dev.otpbridge.totp.QrImageDecoder.decode(contentResolver, uri) }.getOrNull() } }
+            val results = ArrayList<String>()
+            decoded.filter { it.second == null }.forEach { (i, _) -> results += "Image ${i + 1}: no QR code found" }
+            val texts = decoded.mapNotNull { (i, text) -> text?.let { i to it } }
+            val ordered = dev.otpbridge.totp.AuthenticatorImport.orderByPart(texts.map { it.second })
+            ordered.forEach { text ->
+                val i = texts.first { it.second === text }.first
+                if (!text.trim().startsWith("otpauth", true)) { results += "Image ${i + 1}: not an authenticator QR"; return@forEach }
+                val before = importEntries.size; val parts = importBatches.size
+                addImport(text, "image")
+                val part = dev.otpbridge.totp.AuthenticatorImport.runCatching { parseMigration(text).batch }.getOrNull()?.let { "part ${it.index + 1} of ${it.size} · " } ?: ""
+                val added = importEntries.size - before
+                results += if (part.isNotEmpty() && importBatches.size == parts) "Image ${i + 1}: ${part}already added" else "Image ${i + 1}: $part$added account${if (added == 1) "" else "s"}"
+            }
+            importImageResults = importImageResults + results
+            Telemetry.track("import.images", "picked" to uris.size, "decoded" to decoded.count { it.second != null })
+            importDecoding = false
+        }
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -343,10 +369,22 @@ class MainActivity : FragmentActivity() {
                     Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text("1. In Google Authenticator, open ⋮ menu → Transfer accounts → Export accounts.", style = MaterialTheme.typography.bodySmall)
                         Text("2. Select accounts and tap Next to show the QR code.", style = MaterialTheme.typography.bodySmall)
-                        Text("3. Show it on another screen, or screenshot it and scan from a second device. Large exports use several QR codes; scan each one.", style = MaterialTheme.typography.bodySmall)
+                        Text("3. Screenshot each QR code (large exports have several), then choose them all below. Order does not matter.", style = MaterialTheme.typography.bodySmall)
                     }
                 }
-                OutlinedButton(onClick = { launchScan("import") }, modifier = Modifier.fillMaxWidth()) { Text(if (importBatches.isEmpty()) "Scan transfer QR" else "Scan next transfer QR") }
+                Button(enabled = !importDecoding, onClick = { scanMode = "import"; pickQrImages.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, modifier = Modifier.fillMaxWidth()) { Text(if (importDecoding) "Reading images…" else "Choose QR screenshots") }
+                OutlinedButton(onClick = { launchScan("import") }, modifier = Modifier.fillMaxWidth()) { Text(if (importBatches.isEmpty()) "Scan with camera" else "Scan next QR with camera") }
+                if (importDecoding) LinearProgressIndicator(Modifier.fillMaxWidth())
+                if (importBatchSize > 1) Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Parts:", style = MaterialTheme.typography.labelMedium)
+                    (0 until importBatchSize).forEach { part ->
+                        val have = part in importBatches
+                        Surface(shape = RoundedCornerShape(50), color = if (have) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.surfaceVariant) {
+                            Text("${part + 1}", Modifier.padding(horizontal = 10.dp, vertical = 2.dp), style = MaterialTheme.typography.labelMedium, color = if (have) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+                importImageResults.forEach { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 Text("From a text file", style = MaterialTheme.typography.titleSmall)
                 Text("A .txt file with one otpauth:// link per line, as exported by Aegis, 2FAS, Bitwarden and others.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 OutlinedButton(onClick = { scanMode = "import"; openImportFile.launch(arrayOf("text/plain", "text/*", "application/octet-stream")) }, modifier = Modifier.fillMaxWidth()) { Text("Choose file") }
@@ -369,7 +407,7 @@ class MainActivity : FragmentActivity() {
                     Text("SKIPPED · ${importSkipped.size}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     importSkipped.forEach { Text("${it.source}: ${it.reason}", style = MaterialTheme.typography.bodySmall) }
                 }
-                Text("Secrets are read on this phone only and saved into your fingerprint-protected vault. Delete any exported file or screenshot afterwards.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Images and files are read on this phone only; nothing is uploaded. Delete the QR screenshots and export files after importing — they contain your secret keys.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
@@ -574,7 +612,7 @@ class MainActivity : FragmentActivity() {
         Telemetry.track("import.parsed", "source" to source, "found" to r.entries.size, "skipped" to r.skipped.size, "batchIndex" to r.batch?.index, "batchSize" to r.batch?.size)
         status = ""
     }
-    private fun resetImport() { if (scanMode == "import") scanMode = "account"; importEntries = emptyList(); importSkipped = emptyList(); importBatches = emptySet(); importBatchSize = 0; importExcluded = emptySet() }
+    private fun resetImport() { if (scanMode == "import") scanMode = "account"; importEntries = emptyList(); importSkipped = emptyList(); importBatches = emptySet(); importBatchSize = 0; importExcluded = emptySet(); importImageResults = emptyList() }
     private fun saveImport() {
         val chosen = importEntries.filterIndexed { i, _ -> i !in importExcluded }.map { it.account }
         if (chosen.isEmpty()) return

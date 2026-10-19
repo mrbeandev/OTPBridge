@@ -44,6 +44,15 @@ object AuthenticatorImport {
         return Result(entries, skipped, batch)
     }
 
+    /**
+     * Orders decoded QR texts by their embedded transfer part number so users
+     * may pick screenshots in any order; non-transfer texts keep pick order after them.
+     */
+    fun orderByPart(texts: List<String>): List<String> =
+        texts.withIndex().sortedWith(compareBy({ partOf(it.value) ?: Int.MAX_VALUE }, { it.index })).map { it.value }
+    private fun partOf(text: String): Int? =
+        if (!text.trim().startsWith("otpauth-migration://", true)) null else runCatching { parseMigration(text).batch?.index }.getOrNull()
+
     /** Decodes one Google Authenticator transfer QR code. */
     fun parseMigration(uriText: String): Result {
         require(uriText.length <= 64 * 1024) { "Transfer code is too large" }

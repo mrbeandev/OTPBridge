@@ -98,6 +98,16 @@ class Vault(private val context: Context) {
             (0 until array.length()).map { index -> val obj = array.getJSONObject(index); AccountRecord(obj.getString("id"), Totp.validate(TotpAccount(obj.getString("label"), obj.getString("issuer"), obj.getString("secret"), obj.getString("algorithm"), obj.getInt("digits"), obj.getInt("period")))) }
         } finally { plain.fill(0) }
     }
+    /** Adds many accounts in one encrypted write; skips exact duplicates (same secret + settings). Returns added count. */
+    fun addAll(key: ByteArray, incoming: List<TotpAccount>): Int {
+        val existing = accounts(key)
+        fun sig(a: TotpAccount) = "${a.secret.uppercase().replace(" ", "").trimEnd('=')}|${a.algorithm}|${a.digits}|${a.period}"
+        val seen = existing.map { sig(it.account) }.toMutableSet()
+        val fresh = incoming.map(Totp::validate).filter { seen.add(sig(it)) }
+        if (fresh.isEmpty()) return 0
+        save(key, existing + fresh.map { AccountRecord(Base64.encodeToString(ByteArray(32).also { b -> SecureRandom().nextBytes(b) }, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING), it) })
+        return fresh.size
+    }
     fun add(key: ByteArray, account: TotpAccount) = save(key, accounts(key) + AccountRecord(Base64.encodeToString(ByteArray(32).also { SecureRandom().nextBytes(it) }, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING), Totp.validate(account)))
     fun save(key: ByteArray, records: List<AccountRecord>) {
         val array = JSONArray()

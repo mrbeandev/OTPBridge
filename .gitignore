@@ -35,3 +35,7 @@ artifacts/
 artifacts-device-*.xml
 *.apk
 *.aab
+
+# Local authenticator exports contain real TOTP secrets
+authenticator.txt
+*.otpauth.txt

@@ -55,6 +55,12 @@ class MainActivity : FragmentActivity() {
     private var sessionEnabled by mutableStateOf(false)
     private var maskAllCodes by mutableStateOf(false)
     private var diagnosticsOpen by mutableStateOf(false)
+    private var importOpen by mutableStateOf(false)
+    private var importEntries by mutableStateOf<List<dev.otpbridge.totp.AuthenticatorImport.Entry>>(emptyList())
+    private var importSkipped by mutableStateOf<List<dev.otpbridge.totp.AuthenticatorImport.Skipped>>(emptyList())
+    private var importBatches by mutableStateOf<Set<Int>>(emptySet())
+    private var importBatchSize by mutableIntStateOf(0)
+    private var importExcluded by mutableStateOf<Set<Int>>(emptySet())
     private var browserMenu by mutableStateOf<String?>(null)
     private var removeBrowser by mutableStateOf<JSONObject?>(null)
     private var sessionUnlocked by mutableStateOf(false)
@@ -80,7 +86,22 @@ class MainActivity : FragmentActivity() {
     private var approveBinding by mutableStateOf(false)
     private var scanMode = "account"
     private val scan = registerForActivityResult(ScanContract()) { result ->
-        result.contents?.let { text -> if (scanMode == "pair") pairQr = text else { uriInput = text; enrollment = true } }
+        result.contents?.let { text -> when {
+            scanMode == "pair" -> pairQr = text
+            scanMode == "import" || text.startsWith("otpauth-migration://", true) -> addImport(text, "transfer QR")
+            else -> { uriInput = text; enrollment = true }
+        } }
+    }
+    private val openImportFile = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@registerForActivityResult
+        try {
+            val text = contentResolver.openInputStream(uri)?.use { input ->
+                val out = java.io.ByteArrayOutputStream(); val buf = ByteArray(8192)
+                while (true) { val n = input.read(buf); if (n < 0) break; require(out.size() + n <= 512 * 1024) { "File is too large" }; out.write(buf, 0, n) }
+                out.toString(Charsets.UTF_8.name())
+            } ?: throw IllegalStateException("Could not open file")
+            addImport(text, "file")
+        } catch (e: Exception) { status = "Could not read import file: ${e.message ?: "unknown error"}" }
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -190,6 +211,7 @@ class MainActivity : FragmentActivity() {
         }
     }
     @Composable private fun Screen() {
+        if (importOpen) { ImportScreen(); return }
         pairQr?.let { qr ->
             PairBrowserScreen(qr)
             return
@@ -286,11 +308,70 @@ class MainActivity : FragmentActivity() {
                 }
             }
         }
-        if (addMenu) AlertDialog(onDismissRequest = { addMenu = false }, title = { Text("Add an account") }, text = { Text("Scan the QR shown by the service, or enter its setup key.") }, confirmButton = { TextButton(onClick = { addMenu = false; launchScan("account") }) { Text("Scan QR code") } }, dismissButton = { TextButton(onClick = { addMenu = false; uriInput = ""; enrollment = true }) { Text("Enter setup key") } })
+        if (addMenu) AlertDialog(onDismissRequest = { addMenu = false }, title = { Text("Add accounts") }, text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf(Triple("Scan setup QR", "From a website's two-factor setup page") { addMenu = false; launchScan("account") },
+                    Triple("Enter setup key", "Type the key manually") { addMenu = false; uriInput = ""; enrollment = true },
+                    Triple("Import from another app", "Google Authenticator transfer QR or a .txt export") { addMenu = false; resetImport(); importOpen = true }).forEach { (title, detail, action) ->
+                    Surface(onClick = action, shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) { Text(title, fontWeight = FontWeight.Medium); Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    }
+                }
+            }
+        }, confirmButton = { TextButton(onClick = { addMenu = false }) { Text("Close") } })
         if (enrollment) EnrollmentDialog()
         if (diagnosticsOpen) DiagnosticsSheet()
         removeBrowser?.let { d -> AlertDialog(onDismissRequest = { removeBrowser = null }, title = { Text("Remove ${d.getString("browserName")}?") }, text = { Text("This browser will no longer be able to request codes. You can pair it again later.") }, confirmButton = { TextButton(onClick = { removeBrowser = null; operation { network { bridge!!.revoke(d.getString("channelId")) }; status = "${d.getString("browserName")} removed."; refresh(false) } }) { Text("Remove") } }, dismissButton = { TextButton(onClick = { removeBrowser = null }) { Text("Keep") } }) }
         deleteAccount?.let { a -> AlertDialog(onDismissRequest = { deleteAccount = null }, title = { Text("Delete this account?") }, text = { Text("${a.issuer.ifBlank { a.label }} will be removed from this phone. This does not disable two-factor authentication on the service. Make sure you have another way to sign in.") }, confirmButton = { TextButton(onClick = { deleteAccount = null; vault.unlock(this, "Delete ${a.issuer.ifBlank { a.label }}", ::error) { key -> vault.delete(key, a.id); loadCatalog(); status = "Account deleted from this phone." } }) { Text("Delete with fingerprint") } }, dismissButton = { TextButton(onClick = { deleteAccount = null }) { Text("Keep account") } }) }
+    }
+    @Composable private fun ImportScreen() {
+        BackHandler { importOpen = false; resetImport() }
+        val chosen = importEntries.indices.count { it !in importExcluded }
+        Scaffold(
+            topBar = { TopAppBar(title = { Text("Import accounts", style = MaterialTheme.typography.titleMedium) }, navigationIcon = { IconButton(onClick = { importOpen = false; resetImport() }) { Icon(BridgeIcons.Back, contentDescription = "Back") } }) },
+            bottomBar = { if (importEntries.isNotEmpty()) Surface(shadowElevation = 4.dp) {
+                Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (importBatchSize > 1 && importBatches.size < importBatchSize) Text("Scanned ${importBatches.size} of $importBatchSize transfer QR codes. You can import now or scan the rest first.", style = MaterialTheme.typography.bodySmall)
+                    Button(enabled = chosen > 0 && !busy, modifier = Modifier.fillMaxWidth(), onClick = ::saveImport) { Text("Import $chosen account${if (chosen == 1) "" else "s"} with fingerprint") }
+                }
+            } }
+        ) { padding ->
+            Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (status.isNotBlank()) Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(12.dp)) { Text(status, Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall) }
+                Text("From Google Authenticator", style = MaterialTheme.typography.titleSmall)
+                Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+                    Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("1. In Google Authenticator, open ⋮ menu → Transfer accounts → Export accounts.", style = MaterialTheme.typography.bodySmall)
+                        Text("2. Select accounts and tap Next to show the QR code.", style = MaterialTheme.typography.bodySmall)
+                        Text("3. Show it on another screen, or screenshot it and scan from a second device. Large exports use several QR codes; scan each one.", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                OutlinedButton(onClick = { launchScan("import") }, modifier = Modifier.fillMaxWidth()) { Text(if (importBatches.isEmpty()) "Scan transfer QR" else "Scan next transfer QR") }
+                Text("From a text file", style = MaterialTheme.typography.titleSmall)
+                Text("A .txt file with one otpauth:// link per line, as exported by Aegis, 2FAS, Bitwarden and others.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                OutlinedButton(onClick = { scanMode = "import"; openImportFile.launch(arrayOf("text/plain", "text/*", "application/octet-stream")) }, modifier = Modifier.fillMaxWidth()) { Text("Choose file") }
+                if (importEntries.isNotEmpty()) {
+                    Text("FOUND · ${importEntries.size}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    importEntries.forEachIndexed { i, e ->
+                        Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
+                            Row(Modifier.padding(horizontal = 4.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(checked = i !in importExcluded, onCheckedChange = { on -> importExcluded = if (on) importExcluded - i else importExcluded + i })
+                                Column(Modifier.weight(1f)) {
+                                    Text(e.account.issuer.ifBlank { e.account.label }, fontWeight = FontWeight.Medium, maxLines = 1)
+                                    Text(listOfNotNull(e.account.label.takeIf { e.account.issuer.isNotBlank() }, "${e.account.digits} digits", e.account.algorithm.takeIf { it != "SHA1" }, if (e.weak) "short secret" else null).joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                                }
+                            }
+                        }
+                    }
+                    if (importEntries.any { it.weak }) Text("“Short secret” accounts work, but their key is shorter than recommended. Consider re-enrolling them on the website.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (importSkipped.isNotEmpty()) {
+                    Text("SKIPPED · ${importSkipped.size}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    importSkipped.forEach { Text("${it.source}: ${it.reason}", style = MaterialTheme.typography.bodySmall) }
+                }
+                Text("Secrets are read on this phone only and saved into your fingerprint-protected vault. Delete any exported file or screenshot afterwards.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
     }
     @Composable private fun BrowserCard(d: JSONObject) {
         val identity = remember(d.toString()) { dev.otpbridge.ui.BrowserIdentity.from(d.optString("browserInfo"), d.optString("deviceInfo")) }
@@ -480,9 +561,33 @@ class MainActivity : FragmentActivity() {
         val acc = l.getDouble("accuracyMeters")
         return when { acc <= 100 -> "Location ±${acc.toInt()} m"; acc <= 5000 -> "Location ±${"%.1f".format(acc / 1000)} km"; else -> "Approx. area ±${(acc / 1000).toInt()} km" }
     }
+    private fun addImport(text: String, source: String) {
+        val r = try { dev.otpbridge.totp.AuthenticatorImport.parseText(text) } catch (e: Exception) { status = e.message ?: "Could not import"; importOpen = true; return }
+        importOpen = true
+        r.batch?.let { b ->
+            if (importBatchSize != 0 && importBatchSize != b.size) { importEntries = emptyList(); importSkipped = emptyList(); importBatches = emptySet() }
+            importBatchSize = b.size
+            if (b.index in importBatches) { status = "QR ${b.index + 1} of ${b.size} was already scanned."; return }
+            importBatches = importBatches + b.index
+        }
+        importEntries = importEntries + r.entries; importSkipped = importSkipped + r.skipped
+        Telemetry.track("import.parsed", "source" to source, "found" to r.entries.size, "skipped" to r.skipped.size, "batchIndex" to r.batch?.index, "batchSize" to r.batch?.size)
+        status = ""
+    }
+    private fun resetImport() { if (scanMode == "import") scanMode = "account"; importEntries = emptyList(); importSkipped = emptyList(); importBatches = emptySet(); importBatchSize = 0; importExcluded = emptySet() }
+    private fun saveImport() {
+        val chosen = importEntries.filterIndexed { i, _ -> i !in importExcluded }.map { it.account }
+        if (chosen.isEmpty()) return
+        vault.unlock(this, "Import ${chosen.size} account${if (chosen.size == 1) "" else "s"}", ::error) { key ->
+            val added = vault.addAll(key, chosen); val dup = chosen.size - added
+            loadCatalog(); importOpen = false; resetImport()
+            status = "Imported $added account${if (added == 1) "" else "s"}" + if (dup > 0) ". $dup already existed and were skipped." else "."
+            Telemetry.track("import.saved", "added" to added, "duplicates" to dup)
+        }
+    }
     private fun launchScan(mode: String) {
         scanMode = mode
-        scan.launch(ScanOptions().setCaptureActivity(SecureCaptureActivity::class.java).setDesiredBarcodeFormats(ScanOptions.QR_CODE).setPrompt(if (mode == "pair") "Scan browser pairing QR" else "Scan account setup QR").setBeepEnabled(false))
+        scan.launch(ScanOptions().setCaptureActivity(SecureCaptureActivity::class.java).setDesiredBarcodeFormats(ScanOptions.QR_CODE).setPrompt(when (mode) { "pair" -> "Scan browser pairing QR"; "import" -> "Scan Google Authenticator transfer QR"; else -> "Scan account setup QR" }).setBeepEnabled(false))
     }
     @Composable private fun EmptyState(title: String, detail: String) {
         Column(Modifier.fillMaxWidth().padding(vertical = 40.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) { Text(title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Medium); Text(detail, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -507,7 +612,7 @@ class MainActivity : FragmentActivity() {
         dev.otpbridge.relay.RelayClient.cancelAll()
         vault.cancel()
         session.lock(); sessionUnlocked = false; visibleCodes = emptyMap(); lastSessionStep = null; tab = 0; selectedRequest = null; selectedAccount = null; deleteAccount = null; accountMenu = null; addMenu = false
-        approveBinding = false; uriInput = ""; enrollment = false; pairQr = null; busy = false; diagnosticsOpen = false; browserMenu = null; removeBrowser = null
+        approveBinding = false; uriInput = ""; enrollment = false; pairQr = null; busy = false; diagnosticsOpen = false; browserMenu = null; removeBrowser = null; if (scanMode != "import") { importOpen = false; resetImport() }
         super.onStop()
     }
 }

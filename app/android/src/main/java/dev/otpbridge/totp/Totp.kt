@@ -9,22 +9,31 @@ import javax.crypto.spec.SecretKeySpec
 data class TotpAccount(val label: String, val issuer: String, val secret: String, val algorithm: String = "SHA1", val digits: Int = 6, val period: Int = 30)
 
 object Totp {
+    /**
+     * Lenient RFC 4648 Base32, matching mainstream authenticators: ignores spaces,
+     * case and padding, and drops leftover trailing bits. Many services issue
+     * secrets whose length is not a multiple of 8 characters or below 80 bits.
+     */
     fun decodeBase32(input: String): ByteArray {
-        val text = input.trim().uppercase().replace(" ", "")
-        require(text.isNotEmpty() && text.matches(Regex("[A-Z2-7]+={0,6}"))) { "Secret must be valid Base32" }
-        val raw = text.trimEnd('=')
-        if ('=' in text) require(text.length % 8 == 0 && text.length - raw.length == when (raw.length % 8) { 2 -> 6; 4 -> 4; 5 -> 3; 7 -> 1; else -> 0 }) { "Invalid Base32 padding" }
-        require(raw.length % 8 in setOf(0, 2, 4, 5, 7)) { "Invalid Base32 length" }
+        val raw = input.trim().uppercase().replace(" ", "").trimEnd('=')
+        require(raw.isNotEmpty() && raw.matches(Regex("[A-Z2-7]+"))) { "Secret must be valid Base32" }
         var bits = 0; var buffer = 0
-        val result = ArrayList<Byte>()
+        val result = ArrayList<Byte>(raw.length * 5 / 8)
         raw.forEach { ch ->
-            val value = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567".indexOf(ch)
-            buffer = (buffer shl 5) or value; bits += 5
+            buffer = (buffer shl 5) or "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567".indexOf(ch); bits += 5
             if (bits >= 8) { bits -= 8; result.add((buffer shr bits).toByte()); buffer = buffer and ((1 shl bits) - 1) }
         }
-        require(buffer == 0) { "Invalid Base32 trailing bits" }
-        require(result.size >= 10) { "Secret must contain at least 80 bits" }
+        require(result.size >= MIN_SECRET_BYTES) { "Secret is too short" }
         return result.toByteArray()
+    }
+    const val MIN_SECRET_BYTES = 5
+    /** RFC 4226 recommends at least 128 bits and requires 80; shorter ones still work but are weak. */
+    fun isWeak(secret: String): Boolean = decodeBase32(secret).let { val weak = it.size < 10; it.fill(0); weak }
+    fun encodeBase32(bytes: ByteArray): String {
+        val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"; val out = StringBuilder(); var bits = 0; var value = 0
+        bytes.forEach { b -> value = (value shl 8) or (b.toInt() and 255); bits += 8; while (bits >= 5) { bits -= 5; out.append(alphabet[(value shr bits) and 31]) } }
+        if (bits > 0) out.append(alphabet[(value shl (5 - bits)) and 31])
+        return out.toString()
     }
 
     fun validate(account: TotpAccount): TotpAccount {
@@ -37,9 +46,15 @@ object Totp {
         return account
     }
 
-    fun parse(uriText: String): TotpAccount {
+    /**
+     * Parses otpauth://totp. Strict mode (QR scan/manual) rejects unknown
+     * parameters and issuer conflicts; lenient mode (bulk import from other
+     * apps) ignores cosmetic extras such as image/color and prefers the issuer
+     * parameter over the label prefix.
+     */
+    fun parse(uriText: String, lenient: Boolean = false): TotpAccount {
         require(uriText.length <= 4096) { "QR data is too large" }
-        val uri = URI(uriText.trim())
+        val uri = try { URI(uriText.trim()) } catch (_: java.net.URISyntaxException) { throw IllegalArgumentException("Link is malformed") }
         require(uri.scheme == "otpauth" && uri.host == "totp" && uri.fragment == null) { "Only otpauth://totp accounts are supported" }
         fun decode(s: String) = URLDecoder.decode(s.replace("+", "%2B"), "UTF-8")
         val params = linkedMapOf<String, String>()
@@ -48,11 +63,11 @@ object Totp {
             require(key !in params) { "Duplicate TOTP parameter: $key" }
             params[key] = decode(parts.getOrElse(1) { "" })
         }
-        require(params.keys.all { it in setOf("secret", "issuer", "algorithm", "digits", "period") }) { "Unsupported TOTP parameter" }
+        if (!lenient) require(params.keys.all { it in setOf("secret", "issuer", "algorithm", "digits", "period") }) { "Unsupported TOTP parameter" }
         val label = decode(uri.rawPath.orEmpty().removePrefix("/"))
         val labelIssuer = label.substringBefore(':', "")
         val issuer = params["issuer"] ?: labelIssuer
-        require(labelIssuer.isEmpty() || issuer == labelIssuer) { "Issuer does not match the account label" }
+        if (!lenient) require(labelIssuer.isEmpty() || issuer == labelIssuer) { "Issuer does not match the account label" }
         return validate(TotpAccount(label.substringAfter(':'), issuer, params["secret"] ?: error("Missing TOTP secret"), params["algorithm"]?.uppercase() ?: "SHA1", params["digits"]?.toIntOrNull() ?: if ("digits" in params) error("Invalid digit count") else 6, params["period"]?.toIntOrNull() ?: if ("period" in params) error("Invalid period") else 30))
     }
 

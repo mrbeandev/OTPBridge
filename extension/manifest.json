@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "OTPBridge",
-  "version": "0.10.0",
+  "version": "0.12.0",
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
@@ -18,19 +18,30 @@
     "offscreen",
     "geolocation"
   ],
-  "host_permissions": ["https://api.ipify.org/*"],
+  "host_permissions": [
+    "https://api.ipify.org/*",
+    "https://otpbridge.mrbean.dev/*"
+  ],
   "optional_host_permissions": [
     "https://*/*",
     "http://localhost/*",
     "http://127.0.0.1/*",
     "http://[::1]/*"
   ],
-  "background": { "service_worker": "background.js", "type": "module" },
-  "action": { "default_popup": "popup.html", "default_title": "OTPBridge" },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "OTPBridge"
+  },
   "options_page": "options.html",
   "commands": {
     "fill-from-phone": {
-      "suggested_key": { "default": "Alt+Shift+O" },
+      "suggested_key": {
+        "default": "Alt+Shift+O"
+      },
       "description": "Fill focused OTP input from phone"
     }
   },

@@ -47,7 +47,20 @@ test("MV3 worker initializes bundled crypto and setup UI without remote code", a
     expect(state.manifest.permissions).not.toContain("tabs");
     expect(state.manifest.host_permissions).toEqual([
       "https://api.ipify.org/*",
+      "https://otpbridge.mrbean.dev/*",
     ]);
+    // Official relay prefilled, with a warning and a reset after edits.
+    const relayInput = page.getByLabel("Relay URL");
+    await expect(relayInput).toHaveValue("https://otpbridge.mrbean.dev");
+    await expect(
+      page.getByText("Change it only if you know what you are doing."),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Reset to default" }),
+    ).toHaveCount(0);
+    await relayInput.fill("https://relay.example.com");
+    await page.getByRole("button", { name: "Reset to default" }).click();
+    await expect(relayInput).toHaveValue("https://otpbridge.mrbean.dev");
     expect(errors).toEqual([]);
   } finally {
     await context.close();

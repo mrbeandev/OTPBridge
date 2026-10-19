@@ -2,11 +2,12 @@ import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import QRCode from "qrcode";
 import { normalizeRelay } from "@otpbridge/protocol";
+import { DEFAULT_RELAY } from "../relay-default";
 import "../style.css";
 import { ContextSettings } from "./ContextSettings";
 import { Diagnostics } from "./Diagnostics";
 function App() {
-  const [relay, setRelay] = useState(""),
+  const [relay, setRelay] = useState(DEFAULT_RELAY),
     [name, setName] = useState("Laptop"),
     [s, setS] = useState<any>({}),
     [qr, setQr] = useState(""),
@@ -102,13 +103,11 @@ function App() {
                 ? "Relay reachable · phone approval is still required"
                 : "Relay status is being checked or is unavailable"}
             </p>
-            {s.device.relay ===
-              "https://otpbridge-relay.yousef-nabil-qa.workers.dev" && (
+            {s.device.relay.includes("yousef-nabil-qa") && (
               <p className="error">
-                This pairing still uses the earlier relay. To use your
-                gtulasinathreddy account, unpair and pair again with
-                https://otpbridge-relay.gtulasinathreddy.workers.dev. Accounts
-                on your phone are not deleted.
+                This pairing uses a relay that no longer exists. Unpair and pair
+                again to use {DEFAULT_RELAY}. Accounts on your phone are not
+                deleted.
               </p>
             )}
             {s.relayPermission === false && (
@@ -176,11 +175,28 @@ function App() {
             <label>
               Relay URL
               <input
-                placeholder="https://otpbridge-relay.your-name.workers.dev"
+                placeholder={DEFAULT_RELAY}
                 value={relay}
                 onChange={(e) => setRelay(e.target.value)}
                 autoComplete="off"
+                spellCheck={false}
+                aria-describedby="relay-warning"
               />
+              <small id="relay-warning" className="field-warning">
+                Change it only if you know what you are doing.
+                {normalizedOrRaw(relay) !== DEFAULT_RELAY && (
+                  <>
+                    {" "}
+                    <button
+                      type="button"
+                      className="link"
+                      onClick={() => setRelay(DEFAULT_RELAY)}
+                    >
+                      Reset to default
+                    </button>
+                  </>
+                )}
+              </small>
             </label>
             <label>
               Browser name
@@ -194,8 +210,8 @@ function App() {
               {busy ? "Creating pairing…" : "Create pairing QR"}
             </button>
             <p className="muted">
-              Deploy your own Cloudflare Worker first. No account or
-              notification service is required.
+              The default relay only carries encrypted messages it cannot read.
+              Self-hosting your own Cloudflare Worker is optional.
             </p>
           </>
         )}
@@ -216,3 +232,10 @@ function App() {
   );
 }
 createRoot(document.getElementById("root")!).render(<App />);
+function normalizedOrRaw(value: string): string {
+  try {
+    return normalizeRelay(value);
+  } catch {
+    return value;
+  }
+}

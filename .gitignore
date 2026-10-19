@@ -39,3 +39,8 @@ artifacts-device-*.xml
 # Local authenticator exports contain real TOTP secrets
 authenticator.txt
 *.otpauth.txt
+
+# Firebase push credentials (never commit)
+app/android/google-services.json
+secrets/
+*service-account*.json

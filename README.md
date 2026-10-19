@@ -50,7 +50,11 @@ pnpm check
 
 `pnpm build` produces `extension/dist` and performs a Worker dry-run. It does **not** deploy anything or test a phone.
 
-### Deploy your relay
+### Relay
+
+The extension is preconfigured with the official relay, `https://otpbridge.mrbean.dev`. It only carries end-to-end encrypted messages it cannot read, so most users don't need to change anything.
+
+To self-host instead, remove or replace the `routes` entry for `otpbridge.mrbean.dev` in `worker/wrangler.jsonc`, then deploy:
 
 ```sh
 pnpm --filter @otpbridge/worker exec wrangler login

@@ -5,6 +5,8 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
   "workers_dev": true,
+  // Official relay. Self-hosters: remove or replace this route with your own domain.
+  "routes": [{ "pattern": "otpbridge.mrbean.dev", "custom_domain": true }],
   "durable_objects": {
     "bindings": [{ "name": "MAILBOX", "class_name": "Mailbox" }],
   },

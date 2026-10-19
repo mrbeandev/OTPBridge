@@ -268,6 +268,21 @@ test("real browser pairs automatically after authenticated phone SAS confirmatio
       timeout: 10000,
     });
     expect(await destination.evaluate(() => (window as any).submits)).toBe(0);
+    await expect
+      .poll(() =>
+        worker.evaluate(async () =>
+          (globalThis as any).chrome.action.getBadgeText({}),
+        ),
+      )
+      .toMatch(/^\d{1,3}$/);
+    const badge = await worker.evaluate(async () =>
+      Number(await (globalThis as any).chrome.action.getBadgeText({})),
+    );
+    expect(badge).toBeGreaterThan(0);
+    expect(badge).toBeLessThanOrEqual(20);
+    const popup = await context.newPage();
+    await popup.goto(`chrome-extension://${id}/popup.html`);
+    await expect(popup.getByText(/\d+s remaining/)).toBeVisible();
   } finally {
     await context.close();
     await new Promise<void>((r, j) => server.close((e) => (e ? j(e) : r())));

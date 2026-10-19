@@ -24,6 +24,7 @@ import {
   type Target,
 } from "../storage";
 import { captureTarget, fillTarget } from "../content/target";
+import { expiryBadge, remainingSeconds } from "./countdown";
 let chain: Promise<unknown> = Promise.resolve();
 function exclusive<T>(fn: () => Promise<T>): Promise<T> {
   const task = chain.then(fn, fn);
@@ -307,6 +308,8 @@ async function poll(s: State) {
         );
       d.accounts[p.request.origin] = m.accountRef;
       s.status = "Code filled. The form was not submitted.";
+      s.lastFill = { origin: m.origin, validUntil: m.validUntil };
+      startBadgeCountdown();
       break;
     }
   }
@@ -332,9 +335,9 @@ function schedule() {
           s.error = e instanceof Error ? e.message : "Relay unavailable";
         } finally {
           await save(s);
-          await chrome.action.setBadgeText({
-            text: s.pending ? "…" : s.error ? "!" : "",
-          });
+          await updateBadge();
+          if (s.lastFill && s.lastFill.validUntil > Date.now())
+            startBadgeCountdown();
         }
         if (s.pending || s.pairing) schedule();
       });
@@ -342,11 +345,44 @@ function schedule() {
     Math.min(15000, 2000 * 2 ** failures) + Math.random() * 300,
   );
 }
+let badgeTimer: ReturnType<typeof setTimeout> | undefined;
+async function updateBadge() {
+  const state = await load();
+  const seconds = state.lastFill
+    ? remainingSeconds(state.lastFill.validUntil)
+    : 0;
+  await chrome.action.setBadgeBackgroundColor({ color: "#303030" });
+  await chrome.action.setBadgeText({
+    text:
+      seconds > 0
+        ? expiryBadge(state.lastFill!.validUntil)
+        : state.pending
+          ? "…"
+          : state.error
+            ? "!"
+            : "",
+  });
+  await chrome.action.setTitle({
+    title:
+      seconds > 0 ? `OTPBridge · code expires in ${seconds}s` : "OTPBridge",
+  });
+  return seconds;
+}
+function startBadgeCountdown() {
+  if (badgeTimer !== undefined) return;
+  badgeTimer = setTimeout(() => {
+    badgeTimer = undefined;
+    void exclusive(async () => {
+      if ((await updateBadge()) > 0) startBadgeCountdown();
+    });
+  }, 1000);
+}
 async function status() {
   const s = await load();
   return {
     status: s.status,
     error: s.error,
+    lastFill: s.lastFill ?? null,
     device: s.device
       ? {
           phoneName: s.device.phoneName,
@@ -492,5 +528,7 @@ void ready.then(() =>
     await restrictStorage();
     const s = await load();
     if (s.pending || s.pairing) schedule();
+    await updateBadge();
+    if (s.lastFill && s.lastFill.validUntil > Date.now()) startBadgeCountdown();
   }),
 );

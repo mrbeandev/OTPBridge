@@ -3,6 +3,14 @@ import { createRoot } from "react-dom/client";
 import "../style.css";
 function App() {
   const [s, setS] = useState<any>({});
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(timer);
+  }, []);
+  const codeSeconds = s.lastFill
+    ? Math.max(0, Math.ceil((s.lastFill.validUntil - now) / 1000))
+    : 0;
   async function refresh() {
     try {
       const result = await chrome.runtime.sendMessage({ type: "status" });
@@ -33,6 +41,19 @@ function App() {
       <span className="eyebrow">OTPBRIDGE</span>
       <h1>Approve on your phone.</h1>
       <p aria-live="polite">{s.status ?? "Loading…"}</p>
+      {s.lastFill && (
+        <section>
+          <strong>{s.lastFill.origin}</strong>
+          <h2>
+            {codeSeconds > 0 ? `${codeSeconds}s remaining` : "Code expired"}
+          </h2>
+          <p className="muted">
+            {codeSeconds > 0
+              ? "Submit before this code expires."
+              : "Request a fresh code if you still need one."}
+          </p>
+        </section>
+      )}
       {s.pending && (
         <section>
           <strong>{s.pending.origin}</strong>

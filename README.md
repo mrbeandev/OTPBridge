@@ -2,14 +2,16 @@
 
 Phone-approved TOTP autofill for Chrome, with a self-hosted, content-blind Cloudflare relay.
 
-**Early development — not independently security audited.** Do not migrate important authenticator accounts yet. Physical-device testing is deliberately deferred. Use synthetic test accounts until the release acceptance checklist passes.
+**Early development — not independently security audited.** Do not migrate important authenticator accounts yet. Native crypto interoperability and data-preserving upgrades have been checked on a physical device; full biometric/lifecycle acceptance is still in progress. Use synthetic test accounts until the release acceptance checklist passes.
 
 ## How it works
 
 1. Right-click a supported OTP input and choose **Fill from phone**, or focus it and press **Alt+Shift+O**.
 2. Manually open the Android app. It fetches pending encrypted requests while foregrounded.
-3. Review the exact website, browser and account, then approve with strong biometrics.
-4. Your phone generates one TOTP, encrypts the response, and Chrome fills the original input without submitting.
+3. Review the exact website, browser and account, then approve with strong biometrics. Optional **Unlock once per visit** remembers your mode choice: one fingerprint on each app opening reveals live codes and lets you explicitly send during that foreground visit, without another prompt.
+4. Your phone generates one TOTP, encrypts the response, and Chrome fills the original input without submitting. The extension toolbar badge and popup show seconds until that filled code expires.
+
+Requests is the app home screen. Account codes reveal inline with live seconds/progress; session mode rotates them automatically. Backgrounding always clears session keys and visible codes, but keeps the mode toggle enabled for the next opening.
 
 **No push service, Firebase, notification permission, Android background service or background phone polling.** TOTP secrets stay on Android. Cloudflare can see network/routing metadata but cannot decrypt application payloads. This does not make TOTP phishing-resistant.
 

@@ -30,6 +30,8 @@ import dev.otpbridge.protocol.PhoneBridge
 import dev.otpbridge.totp.Totp
 import dev.otpbridge.totp.TotpAccount
 import dev.otpbridge.vault.Vault
+import dev.otpbridge.vault.ForegroundSession
+import dev.otpbridge.totp.CodeTiming
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -40,7 +42,14 @@ class MainActivity : FragmentActivity() {
     private var bridge: PhoneBridge? = null
     private val networkLock = Mutex()
     private val foregroundJobs = mutableSetOf<Job>()
-    private var tab by mutableIntStateOf(0)
+    private var tab by mutableIntStateOf(1)
+    private val session = ForegroundSession()
+    private var sessionEnabled by mutableStateOf(false)
+    private var sessionUnlocked by mutableStateOf(false)
+    private var now by mutableLongStateOf(System.currentTimeMillis())
+    private data class VisibleCode(val code: String, val validUntil: Long)
+    private var visibleCodes by mutableStateOf<Map<String, VisibleCode>>(emptyMap())
+    private var lastSessionStep: String? = null
     private var status by mutableStateOf("")
     private var busy by mutableStateOf(false)
     private var browsers by mutableStateOf<List<JSONObject>>(emptyList())
@@ -57,7 +66,6 @@ class MainActivity : FragmentActivity() {
     private var selectedRequest by mutableStateOf<PhoneBridge.Pending?>(null)
     private var selectedAccount by mutableStateOf<String?>(null)
     private var approveBinding by mutableStateOf(false)
-    private var displayedCode by mutableStateOf<String?>(null)
     private var scanMode = "account"
     private val scan = registerForActivityResult(ScanContract()) { result ->
         result.contents?.let { text -> if (scanMode == "pair") pairQr = text else { uriInput = text; enrollment = true } }
@@ -67,6 +75,11 @@ class MainActivity : FragmentActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         vault = Vault(this)
         loadCatalog()
+        sessionEnabled = getSharedPreferences("preferences", MODE_PRIVATE).getBoolean("foregroundSession", false)
+        lifecycleScope.launch { repeatOnLifecycle(Lifecycle.State.STARTED) {
+            if (sessionEnabled && !session.unlocked) unlockSession()
+            while (isActive) { now = System.currentTimeMillis(); tickCodes(); delay(250) }
+        } }
         runCatching { bridge = PhoneBridge(this); browsers = bridge!!.list() }.onFailure { status = "Device storage unavailable: ${it.message}" }
         lifecycleScope.launch { repeatOnLifecycle(Lifecycle.State.STARTED) { refresh(false); while (isActive) { delay(2500); if (tab == 1 || browsers.any { !it.optBoolean("active") && it.optLong("expiresAt") > System.currentTimeMillis() }) refresh(false) } } }
         setContent { BridgeTheme { Screen() } }
@@ -83,20 +96,49 @@ class MainActivity : FragmentActivity() {
         try { val result = network { val errors = b.refresh { job?.isActive == true && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) }; Triple(b.list(), b.pendingRequests(), errors) }; browsers = result.first; pending = result.second; selectedRequest?.let { reviewed -> if (pending.none { it.key == reviewed.key && it.body.toString() == reviewed.body.toString() }) { selectedRequest = null; selectedAccount = null; approveBinding = false } }; if (result.third.isNotEmpty()) status = result.third.joinToString("\n"); else if (showStatus) status = "Fetched ${pending.size} pending request(s)." } catch (e: CancellationException) { throw e } catch (e: Exception) { status = "Refresh failed: ${e.message}" }
     }
     private fun loadCatalog() {
+        lastSessionStep = null
         runCatching { accounts = vault.summaries(); needsMigration = vault.needsCatalogMigration }.onFailure { status = "Account list unavailable. Unlock once to repair it."; needsMigration = true }
     }
     private fun migrateCatalog() = vault.unlock(this, "Update your account list once", ::error) { key -> vault.migrateCatalog(key); loadCatalog(); status = "Account names are now visible. Codes stay locked." }
     private fun review(request: PhoneBridge.Pending) {
+        if (request.body.getLong("expiresAt") <= System.currentTimeMillis()) { status = "This request expired. Start a new one in the browser."; return }
         selectedRequest = request; approveBinding = true
         val ref = request.body.optString("accountRef", "")
         val choices = accounts.filter { ref.isEmpty() || it.id == ref }
         selectedAccount = choices.singleOrNull()?.id
     }
-    private fun showCode(account: AccountSummary) = vault.unlock(this, "Show ${account.issuer.ifBlank { account.label }} code", ::error) { key ->
+    private fun authorize(reason: String, action: (ByteArray) -> Unit) {
+        if (sessionEnabled && session.unlocked) { try { session.use(action) } catch (e: Exception) { error(e.message ?: "Session operation failed") } }
+        else if (sessionEnabled) {
+            vault.unlock(this, "Unlock this visit", ::error) { key -> session.unlock(key); sessionUnlocked = true; lastSessionStep = null; action(key); tickCodes() }
+        } else vault.unlock(this, reason, ::error, action)
+    }
+    private fun unlockSession() {
+        vault.unlock(this, "Unlock codes until you leave the app", ::error) { key ->
+            session.unlock(key); sessionUnlocked = true
+            if (needsMigration) { vault.migrateCatalog(key); loadCatalog() }
+            lastSessionStep = null; tickCodes()
+        }
+    }
+    private fun setSessionMode(enabled: Boolean) {
+        sessionEnabled = enabled
+        getSharedPreferences("preferences", MODE_PRIVATE).edit().putBoolean("foregroundSession", enabled).apply()
+        session.lock(); sessionUnlocked = false; visibleCodes = emptyMap(); lastSessionStep = null
+        if (enabled) unlockSession()
+    }
+    private fun tickCodes() {
+        if (sessionEnabled && session.unlocked) {
+            val step = accounts.joinToString("|") { "${it.id}:${now / (it.period * 1000L)}" }
+            if (step != lastSessionStep) {
+                try { visibleCodes = session.use { key -> vault.accounts(key).associate { r -> r.id to VisibleCode(Totp.generate(r.account, now / 1000), CodeTiming.validUntil(now, r.account.period)) } }; lastSessionStep = step }
+                catch (e: Exception) { session.lock(); sessionUnlocked = false; visibleCodes = emptyMap(); error(e.message ?: "Session locked") }
+            }
+        } else if (visibleCodes.values.any { it.validUntil <= now }) visibleCodes = visibleCodes.filterValues { it.validUntil > now }
+    }
+    private fun showCode(account: AccountSummary) = authorize("Show ${account.issuer.ifBlank { account.label }} code") { key ->
         val a = vault.accounts(key).firstOrNull { it.id == account.id }?.account ?: throw IllegalStateException("Account no longer exists")
-        val now = System.currentTimeMillis(); val remaining = a.period * 1000L - now % (a.period * 1000L)
-        displayedCode = Totp.generate(a, now / 1000).chunked(3).joinToString(" ")
-        operation { delay(minOf(15000L, remaining)); displayedCode = null }
+        val time = System.currentTimeMillis()
+        visibleCodes = visibleCodes + (account.id to VisibleCode(Totp.generate(a, time / 1000), CodeTiming.validUntil(time, a.period)))
     }
     private fun enroll() {
         try {
@@ -107,7 +149,7 @@ class MainActivity : FragmentActivity() {
     private fun approve() {
         val request = selectedRequest ?: return; val accountId = selectedAccount ?: return
         if (!approveBinding || busy) return
-        vault.unlock(this, "Approve ${request.body.getString("origin")}", ::error) { key ->
+        authorize("Approve ${request.body.getString("origin")}") { key ->
             val account = vault.accounts(key).firstOrNull { it.id == accountId }?.account ?: throw IllegalStateException("Account unavailable")
             val now = System.currentTimeMillis(); val remaining = account.period * 1000 - now % (account.period * 1000)
             val generation = if (remaining < 5000) now + remaining + 50 else now
@@ -135,8 +177,9 @@ class MainActivity : FragmentActivity() {
         Scaffold(
             bottomBar = {
                 NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
-                    listOf("Accounts", "Requests", "Browsers").forEachIndexed { i, label ->
-                        NavigationBarItem(selected = tab == i, onClick = { tab = i; displayedCode = null; status = "" },
+                    listOf(1, 0, 2).forEach { i ->
+                        val label = listOf("Accounts", "Requests", "Browsers")[i]
+                        NavigationBarItem(selected = tab == i, onClick = { tab = i; status = "" },
                             icon = { Icon(listOf(BridgeIcons.Accounts, BridgeIcons.Requests, BridgeIcons.Browser)[i], contentDescription = null) },
                             label = { Text(if (i == 1 && pending.isNotEmpty()) "Requests · ${pending.size}" else label) })
                     }
@@ -151,6 +194,15 @@ class MainActivity : FragmentActivity() {
                     Column { Text(if (tab == 0) "OTPBridge" else if (tab == 1) "Requests" else "Browsers", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.SemiBold)
                         Text(if (tab == 0) "Your accounts. Your approval." else if (tab == 1) "Review before you share a code." else "Only devices you trust.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     if (tab == 1) TextButton(enabled = !busy, onClick = { operation { refresh(true) } }) { Text("Refresh") }
+                }
+                Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) { Text("Unlock once per visit", fontWeight = FontWeight.Medium); Text(if (!sessionEnabled) "Optional · fingerprint for each action" else if (sessionUnlocked) "Unlocked · locks when you leave" else "Locked · fingerprint to reveal and send", style = MaterialTheme.typography.bodySmall) }
+                            Switch(checked = sessionEnabled, onCheckedChange = ::setSessionMode)
+                        }
+                        if (sessionEnabled && !sessionUnlocked) TextButton(onClick = ::unlockSession) { Text("Unlock session") }
+                    }
                 }
                 if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
                 if (status.isNotBlank()) Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(16.dp)) { Text(status, Modifier.padding(16.dp), style = MaterialTheme.typography.bodySmall) }
@@ -168,8 +220,15 @@ class MainActivity : FragmentActivity() {
                                         Column(Modifier.weight(1f).padding(horizontal = 14.dp)) { Text(a.issuer.ifBlank { a.label }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold); if (a.issuer.isNotBlank()) Text(a.label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                                         Box { IconButton(onClick = { accountMenu = a.id }) { Icon(BridgeIcons.More, contentDescription = "Account options for ${a.label}") }; DropdownMenu(expanded = accountMenu == a.id, onDismissRequest = { accountMenu = null }) { DropdownMenuItem(text = { Text("Delete account") }, onClick = { accountMenu = null; deleteAccount = a }) } }
                                     }
-                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) { Text("••• •••", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurfaceVariant); TextButton(onClick = { showCode(a) }) { Text("Reveal code") } }
-                                    Text("${a.digits} digits · ${a.period}s · ${a.algorithm}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    val shown = visibleCodes[a.id]?.takeIf { it.validUntil > now }
+                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                        Text(shown?.code?.chunked(3)?.joinToString(" ") ?: "••• •••", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Medium)
+                                        if (shown == null) TextButton(onClick = { showCode(a) }) { Text("Reveal code") }
+                                        else Text("${CodeTiming.secondsRemaining(now, shown.validUntil)}s", style = MaterialTheme.typography.titleMedium)
+                                    }
+                                    val until = CodeTiming.validUntil(now, a.period)
+                                    LinearProgressIndicator(progress = { ((until - now).toFloat() / (a.period * 1000f)).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+                                    Text("${CodeTiming.secondsRemaining(now, until)}s until next code · ${a.digits} digits · ${a.algorithm}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
                         }
@@ -182,6 +241,7 @@ class MainActivity : FragmentActivity() {
                             Text(request.body.getString("browserName"), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Text(request.body.getString("origin").removePrefix("https://"), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
                             Text("A one-time code is requested. Nothing is shared until you approve.", style = MaterialTheme.typography.bodyMedium)
+                            Text("Request expires in ${CodeTiming.secondsRemaining(now, request.body.getLong("expiresAt"))}s", style = MaterialTheme.typography.labelLarge)
                             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { Button(enabled = !busy, onClick = { review(request) }) { Text("Choose account") }; TextButton(enabled = !busy, onClick = { operation { network { bridge!!.deny(request) }; refresh(false) } }) { Text("Deny") } }
                         } } }
                     }
@@ -205,7 +265,6 @@ class MainActivity : FragmentActivity() {
         }
         if (addMenu) AlertDialog(onDismissRequest = { addMenu = false }, title = { Text("Add an account") }, text = { Text("Scan the QR shown by the service, or enter its setup key.") }, confirmButton = { TextButton(onClick = { addMenu = false; launchScan("account") }) { Text("Scan QR code") } }, dismissButton = { TextButton(onClick = { addMenu = false; uriInput = ""; enrollment = true }) { Text("Enter setup key") } })
         if (enrollment) EnrollmentDialog()
-        displayedCode?.let { code -> AlertDialog(onDismissRequest = { displayedCode = null }, title = { Text("Your one-time code") }, text = { Column { Text(code, style = MaterialTheme.typography.displaySmall); Text("Hidden automatically in a few seconds.", style = MaterialTheme.typography.bodySmall) } }, confirmButton = { TextButton(onClick = { displayedCode = null }) { Text("Hide code") } }) }
         deleteAccount?.let { a -> AlertDialog(onDismissRequest = { deleteAccount = null }, title = { Text("Delete this account?") }, text = { Text("${a.issuer.ifBlank { a.label }} will be removed from this phone. This does not disable two-factor authentication on the service. Make sure you have another way to sign in.") }, confirmButton = { TextButton(onClick = { deleteAccount = null; vault.unlock(this, "Delete ${a.issuer.ifBlank { a.label }}", ::error) { key -> vault.delete(key, a.id); loadCatalog(); status = "Account deleted from this phone." } }) { Text("Delete with fingerprint") } }, dismissButton = { TextButton(onClick = { deleteAccount = null }) { Text("Keep account") } }) }
         pairQr?.let { qr -> AlertDialog(onDismissRequest = { pairQr = null }, title = { Text("Connect this browser?") }, text = { Text("Continue only if you opened this QR in your own extension. Next, compare the digits and confirm here on your phone.") }, confirmButton = { TextButton(onClick = { pairQr = null; operation { network { bridge!!.pair(qr) }; tab = 2; refresh(false) } }) { Text("Continue") } }, dismissButton = { TextButton(onClick = { pairQr = null }) { Text("Cancel") } }) }
         selectedRequest?.let { request -> AlertDialog(onDismissRequest = { selectedRequest = null }, title = { Text("Share one code") }, text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -215,8 +274,9 @@ class MainActivity : FragmentActivity() {
             if (needsMigration) { Text("Unlock once to update your existing account names."); TextButton(onClick = ::migrateCatalog) { Text("Update account list") } }
             accounts.filter { ref.isEmpty() || it.id == ref }.forEach { a -> Row(Modifier.fillMaxWidth().clickable { selectedAccount = a.id }, verticalAlignment = Alignment.CenterVertically) { RadioButton(selected = selectedAccount == a.id, onClick = { selectedAccount = a.id }); Column { Text(a.issuer.ifBlank { a.label }, fontWeight = FontWeight.Medium); if (a.issuer.isNotBlank()) Text(a.label, style = MaterialTheme.typography.bodySmall) } } }
             if (accounts.isEmpty() && !needsMigration) Text("Add an authenticator account first.")
-            Text("Only this code is shared. Your secret key stays here.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        } }, confirmButton = { TextButton(enabled = selectedAccount != null && !busy, onClick = ::approve) { Text("Approve with fingerprint") } }, dismissButton = { TextButton(onClick = { selectedRequest = null }) { Text("Cancel") } }) }
+            selectedAccount?.let { id -> accounts.firstOrNull { it.id == id }?.let { a -> Text("${CodeTiming.secondsRemaining(now, CodeTiming.validUntil(now, a.period))}s until next code", style = MaterialTheme.typography.labelLarge) } }
+            Text("Request expires in ${CodeTiming.secondsRemaining(now, request.body.getLong("expiresAt"))}s. Only this code is shared; your secret stays here.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } }, confirmButton = { TextButton(enabled = selectedAccount != null && !busy, onClick = ::approve) { Text(if (sessionEnabled && sessionUnlocked) "Send code" else "Approve with fingerprint") } }, dismissButton = { TextButton(onClick = { selectedRequest = null }) { Text("Cancel") } }) }
     }
     private fun launchScan(mode: String) {
         scanMode = mode
@@ -243,7 +303,7 @@ class MainActivity : FragmentActivity() {
         foregroundJobs.toList().forEach { it.cancel() }
         dev.otpbridge.relay.RelayClient.cancelAll()
         vault.cancel()
-        displayedCode = null; selectedRequest = null; selectedAccount = null; deleteAccount = null; accountMenu = null; addMenu = false
+        session.lock(); sessionUnlocked = false; visibleCodes = emptyMap(); lastSessionStep = null; tab = 1; selectedRequest = null; selectedAccount = null; deleteAccount = null; accountMenu = null; addMenu = false
         approveBinding = false; uriInput = ""; enrollment = false; pairQr = null; busy = false
         super.onStop()
     }

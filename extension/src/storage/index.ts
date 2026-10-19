@@ -44,6 +44,7 @@ export interface State {
   device?: Device;
   pairing?: Pairing;
   pending?: Pending;
+  lastFill?: { origin: string; validUntil: number };
   status: string;
   error?: string;
 }

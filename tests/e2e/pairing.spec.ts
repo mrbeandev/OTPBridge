@@ -15,7 +15,7 @@ import {
   decryptMessage,
   type PairResponse,
 } from "@otpbridge/protocol";
-test("real browser pairs with encrypted phone simulator and both SAS gates", async () => {
+test("real browser pairs automatically after authenticated phone SAS confirmation", async () => {
   await ready;
   let sequence = 0;
   const messages: Array<{
@@ -170,7 +170,9 @@ test("real browser pairs with encrypted phone simulator and both SAS gates", asy
         `${pairingSas(response).slice(0, 4)} ${pairingSas(response).slice(4)}`,
       ),
     ).toBeVisible({ timeout: 10000 });
-    await page.getByRole("button", { name: "Digits match" }).click();
+    await expect(
+      page.getByRole("button", { name: "Digits match" }),
+    ).toHaveCount(0);
     expect(active).toBe(false);
     const now = Date.now();
     messages.push({

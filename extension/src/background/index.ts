@@ -81,7 +81,6 @@ async function startPair(relayValue: string, browserName: string) {
     own,
     browserToken: c.browserToken,
     cursor: 0,
-    localConfirmed: false,
     phoneConfirmed: false,
     seen: {},
   };
@@ -124,7 +123,7 @@ async function pollPair(s: State) {
     }
   }
   p.cursor = batch.cursor;
-  if (p.localConfirmed && p.phoneConfirmed && p.keys && p.response) {
+  if (p.phoneConfirmed && p.keys && p.response) {
     const now = Date.now();
     if (!p.readyEnvelope) {
       const m: Message = {
@@ -136,6 +135,7 @@ async function pollPair(s: State) {
       p.readyEnvelope = encryptMessage(p.qr.channelId, p.keys.tx, m);
       await save(s);
     }
+    // Phone confirmation authenticates the QR/SAS ceremony; no second browser click.
     // Activate idempotently before sending readiness; the phone must never process
     // requests against an unactivated channel. Retry exactly the persisted envelope.
     await relay.activate();
@@ -364,7 +364,6 @@ async function status() {
       ? {
           qr: JSON.stringify(s.pairing.qr),
           sas: s.pairing.response ? pairingSas(s.pairing.response) : null,
-          localConfirmed: s.pairing.localConfirmed,
           phoneConfirmed: s.pairing.phoneConfirmed,
           expiresAt: s.pairing.qr.expiresAt,
         }
@@ -392,12 +391,6 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, respond) => {
         typeof m.browserName === "string"
       ) {
         await startPair(m.relay, m.browserName);
-        schedule();
-      } else if (m.type === "confirmPair") {
-        const s = await load();
-        if (!s.pairing?.response) throw new Error("No pairing to confirm");
-        s.pairing.localConfirmed = true;
-        await save(s);
         schedule();
       } else if (m.type === "cancel") {
         const s = await load(),

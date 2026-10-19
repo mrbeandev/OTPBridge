@@ -1,6 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "otpbridge-relay",
+  "account_id": "61f2ad2009757c6f281f95d767ab31e2",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
   "workers_dev": true,

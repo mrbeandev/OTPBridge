@@ -30,6 +30,11 @@ class Vault(private val context: Context) {
     private fun b64(bytes: ByteArray) = Base64.encodeToString(bytes, Base64.NO_WRAP)
     private fun un64(value: String) = Base64.decode(value, Base64.NO_WRAP)
     val initialized get() = prefs.contains("wrapped")
+    val needsCatalogMigration get() = prefs.contains("accounts") && !prefs.contains("catalog")
+    fun summaries(): List<AccountSummary> = prefs.getString("catalog", null)?.let(AccountSummaryCodec::decode) ?: emptyList()
+    private fun summary(records: List<AccountRecord>) = records.map { (id, a) -> AccountSummary(id, a.label, a.issuer, a.algorithm, a.digits, a.period) }
+    fun migrateCatalog(key: ByteArray) { val records = accounts(key); check(prefs.edit().putString("catalog", AccountSummaryCodec.encode(summary(records))).commit()) { "Could not migrate account list" } }
+    fun delete(key: ByteArray, id: String) { val records = accounts(key); require(records.any { it.id == id }) { "Account no longer exists" }; save(key, records.filterNot { it.id == id }) }
 
     fun biometricStatus(): Int = BiometricManager.from(context).canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)
 
@@ -101,7 +106,7 @@ class Vault(private val context: Context) {
         try {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES")) }
             val encrypted = JSONObject().put("iv", b64(cipher.iv)).put("data", b64(cipher.doFinal(plain))).toString()
-            check(prefs.edit().putString("accounts", encrypted).commit()) { "Could not save accounts" }
+            check(prefs.edit().putString("accounts", encrypted).putString("catalog", AccountSummaryCodec.encode(summary(records))).commit()) { "Could not save accounts" }
         } finally { plain.fill(0) }
     }
 }

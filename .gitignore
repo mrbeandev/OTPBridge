@@ -32,5 +32,6 @@ local.properties
 .secrets/
 .tools/
 artifacts/
+artifacts-device-*.xml
 *.apk
 *.aab

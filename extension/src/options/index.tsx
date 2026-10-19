@@ -71,6 +71,13 @@ function App() {
   return (
     <main>
       <header>
+        <img
+          className="brand-mark"
+          src="icons/icon-128.png"
+          alt=""
+          width="56"
+          height="56"
+        />
         <span className="eyebrow">PHONE-APPROVED AUTHENTICATOR</span>
         <h1>OTPBridge</h1>
         <p>Your phone holds the secrets. Your relay carries ciphertext.</p>
@@ -137,16 +144,9 @@ function App() {
                   {s.pairing.sas.slice(0, 4)} {s.pairing.sas.slice(4)}
                 </div>
                 <p>
-                  Confirm only if these eight digits match the phone exactly.
+                  Compare these digits on your phone, then confirm there. This
+                  browser connects automatically.
                 </p>
-                <button
-                  disabled={s.pairing.localConfirmed}
-                  onClick={() => void command("confirmPair")}
-                >
-                  {s.pairing.localConfirmed
-                    ? "Browser confirmed"
-                    : "Digits match"}
-                </button>
               </div>
             )}
             <button

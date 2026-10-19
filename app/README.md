@@ -20,7 +20,7 @@ For a sandbox with a read-only home, use a writable `GRADLE_USER_HOME` and `ANDR
 
 - `MainActivity.kt`: Compose screens, QR scanner, foreground lifecycle and explicit approval UI.
 - `totp/Totp.kt`: strict standard TOTP enrollment parser and RFC 6238 generation; SHA1/256/512, six/eight digits, 15–120-second periods.
-- `vault/Vault.kt`: strong-biometric `BiometricPrompt.CryptoObject` wraps/unwraps a random AES vault key with Android Keystore. Account labels and secrets are encrypted together at rest. Every approval performs a fresh authorized unwrap.
+- `vault/Vault.kt`: strong-biometric `BiometricPrompt.CryptoObject` wraps/unwraps a random AES vault key with Android Keystore. Secrets remain in biometric-protected encrypted records. A separate seed-free catalog exposes labels/issuer/settings locally without unlocking. Existing accounts migrate after one authorized unlock. Every approval performs one fresh authorized unwrap; choosing an account needs no biometric. Account deletion requires explicit confirmation plus biometric access and updates encrypted records/catalog together.
 - `data/DeviceStore.kt`: independently device-encrypted browser pairing/transport state, usable for fetching before vault unlock.
 - `protocol/SodiumCrypto.kt`: LazySodium 5.2.0 raw crypto_kx / XChaCha20-Poly1305 adapter.
 - `protocol/PhoneBridge.kt`: shared v1 protocol, QR bootstrap, exact SAS transcript, confirmed browser gating, channel-scoped immutable reviewed requests and atomic durable terminal/outbox transitions.
@@ -36,12 +36,12 @@ Open the app to fetch requests. While Requests is visible, or a pairing is await
 
 Standard setup QR scanning uses bundled ZXing rather than CameraX/MLKit, avoiding Google Play Services and online model downloads. Camera access is used only when scanning. Manual enrollment supports algorithm, digits and period. Google Authenticator migration QR is not supported.
 
-Pairing confirmation numbers must match on both endpoints. The phone does not accept requests before authenticated `pair.ready`. Requests require exact HTTPS origins and same-origin frames; account references are checked against phone-local bindings. Enrollment and approval have no PIN-only fallback. Local revoke takes effect even if relay deletion fails.
+Pairing confirmation numbers must match on both screens; confirm on the phone only and the extension completes automatically. The phone does not accept requests before authenticated `pair.ready`. Requests require exact HTTPS origins and same-origin frames; account references are checked against phone-local bindings. Enrollment and approval have no PIN-only fallback. Local revoke takes effect even if relay deletion fails.
 
 ## Verification and limitations
 
 - Unit tests cover all RFC 6238 SHA1/SHA256/SHA512 vectors, enrollment parsing/rejection and counter boundaries.
-- `CryptoInteropTest` is an instrumentation test using public shared TypeScript fixtures. It checks native crypto_kx directional keys, bootstrap decryption, SAS, session decryption and tamper rejection. It must run on a device/emulator to establish native interoperability.
+- `CryptoInteropTest` is an instrumentation test using public shared TypeScript fixtures. It checks native crypto_kx directional keys, bootstrap decryption, SAS, session decryption and tamper rejection. It passed on the connected RMX3998 physical device on 2026-10-19 (1 instrumentation test); real fingerprint and full lifecycle acceptance remain separate.
 - Real biometric key properties, camera UX, lifecycle and full browser/relay end-to-end behavior require physical-device/manual validation. Do not claim those pass based on a build.
 - No secret backup/export yet. The app warns about phone loss, uninstall, and biometric-key invalidation; retain service recovery codes. Platform backup is disabled.
 - No Room database dependency yet: the small v1 vault/device state uses encrypted private SharedPreferences blobs. Revisit indexed Room storage if account/device/message volume warrants it.

@@ -8,10 +8,11 @@ Do not include real TOTP seeds, codes, pairing QR screenshots, device tokens, ex
 
 ## Protected data
 
+- Android stores encrypted TOTP account records. A separate local display catalog contains only account IDs, issuer/label and TOTP settings, never secrets or codes; it is intentionally readable without biometrics so choosing an account does not cause a second prompt. Existing vaults need one authorized migration unlock. Deletion requires confirmation plus biometric vault access and updates catalog/encrypted records together.
 - Android stores encrypted TOTP account records. The vault key is wrapped by an Android Keystore key requiring strong biometric-authorized key use.
 - Each approval requires a fresh biometric `CryptoObject` unwrap; a UI-only authentication flag is insufficient.
 - Android generates codes locally after approval. The extension receives a single current code, not the seed.
-- Pairing pins per-browser public keys. The one-time QR bootstrap authenticates the pairing transcript; both devices require matching eight-digit confirmation.
+- Pairing pins per-browser public keys. The one-time QR bootstrap authenticates the pairing transcript; both screens display matching eight digits; the user confirms the comparison on the phone, and the browser completes automatically only after decrypting that phone confirmation.
 - Directional libsodium `crypto_kx` session keys encrypt messages with XChaCha20-Poly1305. Random nonces and authenticated routing headers prevent silent envelope substitution.
 - Deadlines, request IDs, origin/account bindings and replay records are validated by endpoints, independently of relay behavior.
 

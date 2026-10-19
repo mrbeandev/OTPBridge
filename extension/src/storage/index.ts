@@ -23,7 +23,6 @@ export interface Pairing {
   cursor: number;
   response?: PairResponse;
   keys?: Keys;
-  localConfirmed: boolean;
   phoneConfirmed: boolean;
   seen: Record<string, number>;
   readyEnvelope?: { id: string; expiresAt: number; payload: string };

@@ -54,7 +54,7 @@ Visit `https://YOUR-WORKER.workers.dev/health`; it should return `{"ok":true,"pr
 1. Run `pnpm --filter @otpbridge/extension build`.
 2. Open `chrome://extensions`, enable Developer mode, choose **Load unpacked**, and select `extension/dist`.
 3. Open OTPBridge settings. Enter the HTTPS relay origin and a browser name; grant permission for that relay only.
-4. Create a pairing QR. Scan it in the Android app and compare all eight digits on both screens. Confirm only if they match.
+4. Create a pairing QR. Scan it in the Android app and compare all eight digits on both screens. Confirm **on the phone only** if they match; the extension finishes automatically.
 
 The QR contains one-time secrets. Never share it, capture it in bug reports, or paste it into a web-based QR reader.
 
@@ -78,7 +78,7 @@ pnpm exec playwright install chromium
 pnpm test:browser
 ```
 
-The browser suite loads the actual MV3 bundle and exercises encrypted pairing, both SAS confirmations, lost-response retries, and guarded filling with a synthetic phone endpoint. Native permission prompts and OS shortcut delivery are simulated only in a disposable extension copy; actual user gestures and Android biometrics remain manual acceptance checks.
+The browser suite loads the actual MV3 bundle and exercises encrypted pairing, SAS comparison and authenticated phone-only confirmation, lost-response retries, and guarded filling with a synthetic phone endpoint. Native permission prompts and OS shortcut delivery are simulated only in a disposable extension copy; actual user gestures and Android biometrics remain manual acceptance checks.
 
 ## Supported v1 behavior
 

@@ -42,7 +42,7 @@ pnpm check
 
 ```sh
 pnpm --filter @otpbridge/worker exec wrangler login
-pnpm --filter @otpbridge/worker deploy
+pnpm --filter @otpbridge/worker run deploy
 ```
 
 Choose a unique Worker name in `worker/wrangler.jsonc` if needed. The deployment uses a SQLite-backed Durable Object, supported on Cloudflare's free plan. No domain, Firebase project or external database is required. Free quotas still apply; this is not a promise of unlimited free hosting.

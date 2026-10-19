@@ -9,5 +9,4 @@
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Mailbox"] }],
   "observability": { "enabled": false },
-  "limits": { "cpu_ms": 10 },
 }

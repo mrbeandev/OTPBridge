@@ -23,7 +23,7 @@ Browser tests use an isolated copied extension with preauthorized test hosts and
 - [ ] Run compiled native crypto interoperability instrumentation on a device/emulator. TypeScript fixtures and Android transcript unit tests are NOT a substitute for native libsodium execution.
 - [ ] Real strong biometric enrollment, per-approval CryptoObject authorization, cancellation and key invalidation.
 - [ ] Scan account/pair QR with the camera; compare SAS on real phone/browser.
-- [ ] Deploy relay in a user-owned Cloudflare account and verify free-tier limits/behavior.
+- [x] Deploy relay to the user-confirmed Cloudflare account on the free plan; live health, mailbox authentication/role isolation/delivery/duplicate/deletion smoke checks pass. Quota-exhaustion/load behavior remains untested.
 - [ ] Complete Chrome → deployed relay → phone → original input acceptance.
 - [ ] Real first/second context-menu action, shortcut delivery, activeTab grant and same-origin frame behavior.
 - [ ] Android background/rotation/process-death races and queued-response recovery on real hardware.
@@ -31,7 +31,7 @@ Browser tests use an isolated copied extension with preauthorized test hosts and
 - [ ] Release signing, supported native ABIs/16KiB APK compatibility and store target-SDK requirements.
 - [ ] Independent security review before important authenticator accounts.
 
-No ADB installation or testing was performed after the user deferred device testing. No Cloudflare deployment, remote CI run, store publication or Git push is claimed.
+No ADB installation or testing was performed after the user deferred device testing. Cloudflare deployment and live synthetic transport smoke checks completed on 2026-10-19. No remote CI run, store publication or Git push is claimed.
 
 ## Intentionally not implemented in v1
 

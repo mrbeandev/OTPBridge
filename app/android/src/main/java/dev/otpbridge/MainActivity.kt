@@ -185,6 +185,10 @@ class MainActivity : FragmentActivity() {
         }
     }
     @Composable private fun Screen() {
+        pairQr?.let { qr ->
+            PairBrowserScreen(qr)
+            return
+        }
         selectedRequest?.let { request ->
             ReviewScreen(request)
             return
@@ -286,20 +290,49 @@ class MainActivity : FragmentActivity() {
         if (addMenu) AlertDialog(onDismissRequest = { addMenu = false }, title = { Text("Add an account") }, text = { Text("Scan the QR shown by the service, or enter its setup key.") }, confirmButton = { TextButton(onClick = { addMenu = false; launchScan("account") }) { Text("Scan QR code") } }, dismissButton = { TextButton(onClick = { addMenu = false; uriInput = ""; enrollment = true }) { Text("Enter setup key") } })
         if (enrollment) EnrollmentDialog()
         deleteAccount?.let { a -> AlertDialog(onDismissRequest = { deleteAccount = null }, title = { Text("Delete this account?") }, text = { Text("${a.issuer.ifBlank { a.label }} will be removed from this phone. This does not disable two-factor authentication on the service. Make sure you have another way to sign in.") }, confirmButton = { TextButton(onClick = { deleteAccount = null; vault.unlock(this, "Delete ${a.issuer.ifBlank { a.label }}", ::error) { key -> vault.delete(key, a.id); loadCatalog(); status = "Account deleted from this phone." } }) { Text("Delete with fingerprint") } }, dismissButton = { TextButton(onClick = { deleteAccount = null }) { Text("Keep account") } }) }
-        pairQr?.let { qr ->
-            val details = remember(qr) { runCatching { JSONObject(qr) }.getOrNull() }
-            ModalBottomSheet(onDismissRequest = { pairQr = null }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = MaterialTheme.colorScheme.surface) {
-                Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 28.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("PAIR BROWSER", style = MaterialTheme.typography.labelMedium)
-                    Text(details?.optString("browserName")?.take(80)?.ifBlank { "Unknown browser" } ?: "Invalid pairing QR", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
-                    Text(details?.optString("deviceInfo")?.take(240) ?: "", style = MaterialTheme.typography.bodyMedium)
-                    Text(details?.optString("browserInfo")?.take(240) ?: "", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("Relay", style = MaterialTheme.typography.labelLarge)
-                    Text(details?.optString("relay")?.take(2048) ?: "", style = MaterialTheme.typography.bodySmall)
-                    Text("Approve only if you opened this QR in your own browser. This gives the browser permission to request codes—not access to your secret keys.", style = MaterialTheme.typography.bodyMedium)
-                    Button(enabled = details != null && !busy, modifier = Modifier.fillMaxWidth(), onClick = { pairQr = null; operation { network { bridge!!.pair(qr) }; tab = 2; refresh(false) } }) { Text("Approve browser") }
+    }
+    @Composable private fun PairBrowserScreen(qr: String) {
+        BackHandler { pairQr = null }
+        val details = remember(qr) { runCatching { require(dev.otpbridge.protocol.StrictJson.validUnicode(qr)); org.json.JSONObject(qr) }.getOrNull() }
+        val identity = remember(qr) { dev.otpbridge.ui.BrowserIdentity.from(details?.optString("browserInfo") ?: "", details?.optString("deviceInfo") ?: "") }
+        val browserName = details?.optString("browserName")?.take(80)?.ifBlank { "Unknown browser" } ?: "Invalid QR code"
+        val relay = details?.optString("relay")?.take(2048) ?: ""
+        var technicalDetails by remember(qr) { mutableStateOf(false) }
+        val expired = (details?.optLong("expiresAt") ?: 0L) <= now
+        Scaffold(
+            topBar = { TopAppBar(title = { Text("Connect browser", style = MaterialTheme.typography.titleMedium) }, navigationIcon = { IconButton(onClick = { pairQr = null }) { Icon(BridgeIcons.Back, contentDescription = "Back to Home") } }) },
+            bottomBar = { Surface(shadowElevation = 4.dp) {
+                Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (expired) Text("This QR expired. Create a new one in your extension.", style = MaterialTheme.typography.bodySmall)
+                    Button(enabled = details != null && !busy && !expired, modifier = Modifier.fillMaxWidth(), onClick = { pairQr = null; operation { network { bridge!!.pair(qr) }; tab = 2; refresh(false) } }) { Text("Connect $browserName", maxLines = 1) }
                     TextButton(modifier = Modifier.fillMaxWidth(), onClick = { pairQr = null }) { Text("Not my browser") }
                 }
+            } }
+        ) { padding ->
+            Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+                Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
+                    Row(Modifier.padding(20.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        dev.otpbridge.ui.BrowserMark(identity.browser)
+                        Column(Modifier.weight(1f)) { Text(browserName, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold); Text(identity.summary, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    }
+                }
+                Text("Is this your browser?", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+                Text("Connect only if you opened this QR yourself.", style = MaterialTheme.typography.bodyMedium)
+                Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("You stay in control", style = MaterialTheme.typography.titleSmall)
+                        Text("This browser can ask for a code. You decide what to send.", style = MaterialTheme.typography.bodyMedium)
+                        Text("Your secret keys never leave this phone.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                Text("Relay", style = MaterialTheme.typography.labelLarge)
+                Text(relay.removePrefix("https://"), style = MaterialTheme.typography.bodySmall)
+                TextButton(onClick = { technicalDetails = !technicalDetails }) { Text(if (technicalDetails) "Hide technical details" else "Technical details") }
+                AnimatedVisibility(technicalDetails) { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(details?.optString("browserInfo")?.take(240) ?: "", style = MaterialTheme.typography.bodySmall)
+                    Text(details?.optString("deviceInfo")?.take(240) ?: "", style = MaterialTheme.typography.bodySmall)
+                    Text("Browser details are provided by the scanned QR, not verified hardware identity.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } }
             }
         }
     }
@@ -312,6 +345,9 @@ class MainActivity : FragmentActivity() {
         val left = CodeTiming.secondsRemaining(now, body.getLong("expiresAt"))
         val ref = body.optString("accountRef", "")
         val choices = accounts.filter { ref.isEmpty() || it.id == ref }
+        var accountQuery by remember(request.key) { mutableStateOf("") }
+        val showSearch = dev.otpbridge.vault.AccountSearch.shouldShow(choices)
+        val filteredChoices = dev.otpbridge.vault.AccountSearch.filter(choices, accountQuery)
         Scaffold(
             topBar = {
                 TopAppBar(title = { Text("Review request", style = MaterialTheme.typography.titleMedium) }, navigationIcon = {
@@ -362,8 +398,10 @@ class MainActivity : FragmentActivity() {
                 if (needsMigration) TextButton(onClick = ::migrateCatalog) { Text("Unlock once to update account list") }
                 if (choices.isEmpty() && !needsMigration) Text("Add an authenticator account first.", style = MaterialTheme.typography.bodyMedium)
                 Text("Choose an account", style = MaterialTheme.typography.titleSmall)
+                if (showSearch) OutlinedTextField(value = accountQuery, onValueChange = { query -> accountQuery = query; if (dev.otpbridge.vault.AccountSearch.filter(choices, query).none { it.id == selectedAccount }) selectedAccount = null }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Search accounts") }, placeholder = { Text("Name, issuer or email") }, trailingIcon = { if (accountQuery.isNotEmpty()) TextButton(onClick = { accountQuery = "" }) { Text("Clear") } })
+                if (showSearch && filteredChoices.isEmpty()) Text("No matching accounts.", style = MaterialTheme.typography.bodySmall)
                 Column(Modifier.fillMaxWidth()) {
-                    choices.forEach { a ->
+                    filteredChoices.forEach { a ->
                         val selected = selectedAccount == a.id
                         Surface(shape = RoundedCornerShape(12.dp), color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp).clickable { selectedAccount = a.id }) {
                             Row(Modifier.padding(horizontal = 4.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {

@@ -13,6 +13,8 @@ object StrictJson {
                 require(value is Int || value is Long) { "Integer required: $key" }
                 val number = (value as Number).toLong()
                 require(number in 0..9007199254740991L) { "Invalid integer: $key" }
+            } else if (key == "context") {
+                require(value is JSONObject); RequestContext.validate(value)
             } else if (key != "messages") {
                 require(value is String) { "String required: $key" }
                 require(value.length <= 22000 && validUnicode(value)) { "Invalid string: $key" }

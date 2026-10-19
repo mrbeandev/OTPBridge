@@ -54,6 +54,10 @@ test("real browser pairs automatically after authenticated phone SAS confirmatio
       );
       return;
     }
+    if (url.pathname === "/health") {
+      res.end(JSON.stringify({ ok: true, protocolVersions: [1] }));
+      return;
+    }
     if (!role) {
       res.statusCode = 401;
       res.end("{}");
@@ -189,6 +193,21 @@ test("real browser pairs automatically after authenticated phone SAS confirmatio
       page.getByRole("heading", { name: "Connected phone" }),
     ).toBeVisible({ timeout: 30000 });
     expect(active).toBe(true);
+    await expect(
+      page.getByRole("button", { name: "Restore relay permission" }),
+    ).toHaveCount(0);
+    await expect
+      .poll(() =>
+        worker.evaluate(
+          async () =>
+            (
+              await (globalThis as any).chrome.storage.session.get(
+                "relayHealth",
+              )
+            ).relayHealth?.reachable,
+        ),
+      )
+      .toBe(true);
     expect(readyAttempts.length).toBeGreaterThanOrEqual(2);
     expect(new Set(readyAttempts).size).toBe(1);
     const outgoing = messages.find(

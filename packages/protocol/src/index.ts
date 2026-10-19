@@ -151,6 +151,43 @@ const common = {
   createdAt: timestamp,
   expiresAt: timestamp,
 };
+const contextText = z.string().min(1).max(240).refine(validUnicode);
+export const requestContextSchema = z
+  .object({
+    device: z
+      .object({
+        name: contextText,
+        os: contextText.optional(),
+        hardwareConcurrency: z.number().int().min(1).max(1024).optional(),
+        memoryGb: z.number().min(0.25).max(1024).optional(),
+      })
+      .strict()
+      .optional(),
+    browser: z
+      .object({
+        name: contextText,
+        version: contextText,
+        language: contextText.optional(),
+      })
+      .strict()
+      .optional(),
+    publicIp: z
+      .string()
+      .max(45)
+      .regex(/^(?:[0-9]{1,3}(?:\.[0-9]{1,3}){3}|[0-9a-fA-F:]+)$/)
+      .optional(),
+    location: z
+      .object({
+        latitude: z.number().min(-90).max(90),
+        longitude: z.number().min(-180).max(180),
+        accuracyMeters: z.number().min(0).max(10000000),
+        capturedAt: timestamp,
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+export type RequestContext = z.infer<typeof requestContextSchema>;
 export const messageSchema = z.discriminatedUnion("type", [
   z
     .object({
@@ -160,6 +197,7 @@ export const messageSchema = z.discriminatedUnion("type", [
       origin,
       frameOrigin: origin,
       accountRef: idSchema.optional(),
+      context: requestContextSchema.optional(),
     })
     .strict(),
   z

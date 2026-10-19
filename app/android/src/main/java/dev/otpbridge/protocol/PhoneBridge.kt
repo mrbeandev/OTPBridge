@@ -182,7 +182,7 @@ class PhoneBridge(context: Context) {
                 durable { seen.put(id, expiry + 300000); d.put("active", true) }
             }
             "fill.request" -> {
-                strict(body, common + setOf("browserName", "origin", "frameOrigin"), setOf("accountRef"))
+                strict(body, common + setOf("browserName", "origin", "frameOrigin"), setOf("accountRef", "context"))
                 require(d.getBoolean("active") && body.getString("browserName") == d.getString("browserName"))
                 val site = body.getString("origin"); require(site.length <= 2048 && origin(site) && site == body.getString("frameOrigin"))
                 val ref = body.optString("accountRef", ""); if (body.has("accountRef")) requireId(ref)

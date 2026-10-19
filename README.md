@@ -11,9 +11,15 @@ Phone-approved TOTP autofill for Chrome, with a self-hosted, content-blind Cloud
 3. Review the exact website, browser and account, then approve with strong biometrics. Optional **Unlock once per visit** remembers your mode choice: one fingerprint on each app opening reveals live codes and lets you explicitly send during that foreground visit, without another prompt.
 4. Your phone generates one TOTP, encrypts the response, and Chrome fills the original input without submitting. The extension toolbar badge and popup show seconds until that filled code expires.
 
-Requests is the app home screen. Account codes reveal inline with live seconds/progress; session mode rotates them automatically. Backgrounding always clears session keys and visible codes, but keeps the mode toggle enabled for the next opening.
+Home combines accounts and approvals in one compact screen. Incoming requests animate into a section above the account list, pushing accounts down; no separate Requests tab is needed. Account codes reveal inline with live seconds/progress; session mode rotates them automatically. Backgrounding always clears session keys and visible codes, but keeps the mode toggle enabled for the next opening.
 
 **No push service, Firebase, notification permission, Android background service or background phone polling.** TOTP secrets stay on Android. Cloudflare can see network/routing metadata but cannot decrypt application payloads. This does not make TOTP phishing-resistant.
+
+## Request details and connection status
+
+Extension settings let you disable collection of location, public IP, device hints and browser information independently. Requesting website/domain is mandatory. Location collection starts enabled; Chrome requires `geolocation` in the extension's required permissions (it cannot be optional). Turning location off prevents every geolocation call; coordinates include accuracy/time and are not guaranteed GPS. IP uses api.ipify.org only after its host permission is granted. Denied/unavailable details are omitted. Nothing tracks location in the background. Update both app and extension to v0.4 before using context (older strict clients reject new fields).
+
+A bottom green icon dot means the configured relay passed a recent `/health` check, not that the phone is online. Checks occur about once per minute in the extension; the numeric OTP countdown remains independent. Restore relay permission appears only if that relay host permission is missing. Existing pairings retain their relay—changing Cloudflare deployments does not migrate them; unpair/re-pair to change relays.
 
 ## Repository
 

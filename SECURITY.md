@@ -38,6 +38,10 @@ Phone loss/uninstall/Keystore invalidation can destroy vault access. V1 delibera
 
 Revocation is authoritative on the phone: remove local trust before attempting network cleanup. A best-effort relay deletion does not replace local revocation. Re-pairing requires new explicit confirmation; never accept silently replaced keys.
 
+## Optional request context
+
+Extension settings control both collection and transmission of each optional detail. Domain/origin remains mandatory. Location is enabled as a preference by default but uses Chrome's required extension geolocation permission (Chrome rejects this permission as optional); the application collection toggle still gates every lookup; one-shot lookup reports browser coordinates, accuracy and captured time, not guaranteed GPS precision. No continuous watch/background tracking. IP lookup requires an explicit host grant for api.ipify.org; that external service necessarily sees the requesting IP. The returned public IP may represent a VPN/proxy. Device name is user-chosen; OS/CPU/memory/browser hints are limited browser-exposed context, not hardware identifiers or attestation. Disabled fields are not collected; preferences are rechecked before sending if changed during lookup. Denied/unavailable fields are omitted and do not block a request. All included context stays inside authenticated E2EE envelopes and is subject to strict schemas; it is not trustworthy evidence against a compromised paired browser. A green toolbar dot means a recent compatible relay health check, not phone presence or identity verification.
+
 ## Development controls
 
 Do not log payloads, OTPs, seeds, bearer tokens or QR contents. Disable platform backup for key/secret-bearing Android data. Do not sync extension keys with Chrome sync. Bundle dependencies; no remotely hosted code. Keep credentials out of URLs and version control. Any new push, export, caching or background feature needs a revised threat model and tests.

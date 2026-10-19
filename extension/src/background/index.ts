@@ -25,6 +25,8 @@ import {
 } from "../storage";
 import { captureTarget, fillTarget } from "../content/target";
 import { expiryBadge, remainingSeconds } from "./countdown";
+import { probeRelay, type RelayHealth } from "./relay-status";
+import { collectContext, preferences } from "./request-context";
 let chain: Promise<unknown> = Promise.resolve();
 function exclusive<T>(fn: () => Promise<T>): Promise<T> {
   const task = chain.then(fn, fn);
@@ -203,8 +205,9 @@ async function requestFill(
   }
   if (s.pending)
     throw new Error("Cancel the current request before starting another");
-  const target = await capture(tabId, frameId, useContext),
-    now = Date.now(),
+  const target = await capture(tabId, frameId, useContext);
+  const context = await collectContext(await preferences());
+  const now = Date.now(),
     d = s.device;
   const request: FillRequest = {
     type: "fill.request",
@@ -214,6 +217,7 @@ async function requestFill(
     browserName: d.browserName,
     origin: target.origin,
     frameOrigin: target.origin,
+    ...(Object.keys(context).length ? { context } : {}),
     ...(d.accounts[target.origin]
       ? { accountRef: d.accounts[target.origin] }
       : {}),
@@ -377,12 +381,74 @@ function startBadgeCountdown() {
     });
   }, 1000);
 }
+let relayHealth: RelayHealth = {
+  relay: null,
+  reachable: false,
+  permission: false,
+  checkedAt: 0,
+};
+let healthInFlight: Promise<void> | undefined;
+async function refreshRelayHealth() {
+  if (healthInFlight) return healthInFlight;
+  healthInFlight = (async () => {
+    const state = await load();
+    const relay = state.device?.relay ?? state.pairing?.qr.relay ?? null;
+    const permission = relay
+      ? await chrome.permissions.contains({ origins: [`${relay}/*`] })
+      : false;
+    const next = relay
+      ? await probeRelay(relay, permission)
+      : {
+          relay: null,
+          reachable: false,
+          permission: false,
+          checkedAt: Date.now(),
+        };
+    relayHealth = next;
+    const paths = Object.fromEntries(
+      [16, 32, 48, 128].map((size) => [
+        size,
+        `icons/icon-${size}${next.reachable ? "-connected" : ""}.png`,
+      ]),
+    );
+    await chrome.action.setIcon({ path: paths });
+    await chrome.storage.session.set({ relayHealth: next });
+  })().finally(() => {
+    healthInFlight = undefined;
+  });
+  return healthInFlight;
+}
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === "relay-health") void refreshRelayHealth();
+});
+chrome.permissions.onRemoved.addListener(() => {
+  relayHealth.checkedAt = 0;
+  void refreshRelayHealth();
+});
+chrome.permissions.onAdded.addListener(() => {
+  relayHealth.checkedAt = 0;
+  void refreshRelayHealth();
+});
 async function status() {
   const s = await load();
+  if (
+    relayHealth.relay !== (s.device?.relay ?? s.pairing?.qr.relay ?? null) ||
+    Date.now() - relayHealth.checkedAt > 45000
+  )
+    void refreshRelayHealth();
+  const relay = s.device?.relay ?? s.pairing?.qr.relay;
+  const relayPermission = relay
+    ? await chrome.permissions.contains({ origins: [`${relay}/*`] })
+    : false;
   return {
     status: s.status,
     error: s.error,
     lastFill: s.lastFill ?? null,
+    relayPermission,
+    relayHealth:
+      relayHealth.relay === relay && Date.now() - relayHealth.checkedAt < 90000
+        ? relayHealth
+        : null,
     device: s.device
       ? {
           phoneName: s.device.phoneName,
@@ -526,6 +592,8 @@ chrome.tabs.onRemoved.addListener((id) => {
 void ready.then(() =>
   exclusive(async () => {
     await restrictStorage();
+    await chrome.alarms.create("relay-health", { periodInMinutes: 1 });
+    void refreshRelayHealth();
     const s = await load();
     if (s.pending || s.pairing) schedule();
     await updateBadge();

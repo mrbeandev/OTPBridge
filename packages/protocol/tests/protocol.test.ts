@@ -45,6 +45,37 @@ function req(): FillRequest {
   };
 }
 describe("authenticated encrypted protocol", () => {
+  it("encrypts bounded optional context and rejects invalid coordinates/unknown fields", () => {
+    const s = setup();
+    const message = {
+      ...req(),
+      context: {
+        location: {
+          latitude: 12.5,
+          longitude: 77.2,
+          accuracyMeters: 30,
+          capturedAt: Date.now(),
+        },
+        device: { name: "Test computer" },
+        publicIp: "203.0.113.5",
+      },
+    };
+    const encrypted = encryptMessage(s.channel, s.bk.tx, message);
+    expect(encrypted.payload).not.toContain("203.0.113.5");
+    expect(decryptMessage(s.channel, s.pk.rx, encrypted)).toEqual(message);
+    expect(() =>
+      validateMessage({
+        ...message,
+        context: { location: { ...message.context.location, latitude: 999 } },
+      }),
+    ).toThrow();
+    expect(() =>
+      validateMessage({
+        ...message,
+        context: { serialNumber: "not-supported" },
+      }),
+    ).toThrow();
+  });
   it("rejects noncanonical ID padding bits and invalid Unicode names", () => {
     expect(() => idSchema.parse("A".repeat(42) + "B")).toThrow();
     const s = setup();

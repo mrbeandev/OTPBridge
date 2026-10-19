@@ -1,3 +1,24 @@
+.toggle-row {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.toggle-row small {
+  display: block;
+  font-weight: 400;
+  color: var(--subtle);
+  margin-top: 4px;
+}
+.toggle-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  margin: 0;
+  accent-color: var(--ink);
+}
 :root {
   font:
     15px/1.6 system-ui,
@@ -20,7 +41,7 @@ body {
 }
 main {
   max-width: 700px;
-  margin: 64px auto;
+  margin: 32px auto;
   padding: 0 28px;
 }
 .brand-mark {
@@ -29,10 +50,10 @@ main {
   margin-bottom: 20px;
 }
 header {
-  margin-bottom: 36px;
+  margin-bottom: 20px;
 }
 h1 {
-  font-size: 40px;
+  font-size: 30px;
   line-height: 1.15;
   letter-spacing: -0.045em;
   margin: 12px 0;
@@ -61,9 +82,9 @@ header p {
 section {
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 24px;
-  padding: 28px;
-  margin: 20px 0;
+  border-radius: 16px;
+  padding: 20px;
+  margin: 14px 0;
 }
 label {
   display: block;
@@ -87,8 +108,8 @@ button {
   border-radius: 12px;
   background: var(--ink);
   color: var(--inverse);
-  padding: 13px 20px;
-  font: 600 14px system-ui;
+  padding: 10px 16px;
+  font: 600 13px system-ui;
   cursor: pointer;
   margin: 6px 8px 6px 0;
   transition:

@@ -8,6 +8,7 @@ export default defineConfig({
       input: {
         options: "options.html",
         popup: "popup.html",
+        location: "location.html",
         background: "src/background/index.ts",
       },
       output: {

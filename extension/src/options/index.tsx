@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import QRCode from "qrcode";
 import { normalizeRelay } from "@otpbridge/protocol";
 import "../style.css";
+import { ContextSettings } from "./ContextSettings";
 function App() {
   const [relay, setRelay] = useState(""),
     [name, setName] = useState("Laptop"),
@@ -95,21 +96,37 @@ function App() {
               <strong>Fill from phone</strong>, or press <kbd>Alt+Shift+O</kbd>.
               Then open the Android app and approve.
             </p>
-            <button
-              className="secondary"
-              onClick={async () => {
-                try {
-                  const granted = await chrome.permissions.request({
-                    origins: [`${normalizeRelay(s.device.relay)}/*`],
-                  });
-                  setError(granted ? "" : "Relay permission was not granted");
-                } catch (e) {
-                  setError(String(e));
-                }
-              }}
-            >
-              Restore relay permission
-            </button>
+            <p className="muted">
+              {s.relayHealth?.reachable
+                ? "Relay reachable · phone approval is still required"
+                : "Relay status is being checked or is unavailable"}
+            </p>
+            {s.device.relay ===
+              "https://otpbridge-relay.yousef-nabil-qa.workers.dev" && (
+              <p className="error">
+                This pairing still uses the earlier relay. To use your
+                gtulasinathreddy account, unpair and pair again with
+                https://otpbridge-relay.gtulasinathreddy.workers.dev. Accounts
+                on your phone are not deleted.
+              </p>
+            )}
+            {s.relayPermission === false && (
+              <button
+                className="secondary"
+                onClick={async () => {
+                  try {
+                    const granted = await chrome.permissions.request({
+                      origins: [`${normalizeRelay(s.device.relay)}/*`],
+                    });
+                    setError(granted ? "" : "Relay permission was not granted");
+                  } catch (e) {
+                    setError(String(e));
+                  }
+                }}
+              >
+                Restore relay permission
+              </button>
+            )}
             <button
               className="secondary"
               onClick={() => {
@@ -185,6 +202,7 @@ function App() {
           </>
         )}
       </section>
+      <ContextSettings />
       <section aria-live="polite">
         <h2>Status</h2>
         <p>{s.status}</p>

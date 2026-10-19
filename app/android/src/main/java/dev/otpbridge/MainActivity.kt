@@ -5,6 +5,12 @@ import android.view.WindowManager
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -42,7 +48,7 @@ class MainActivity : FragmentActivity() {
     private var bridge: PhoneBridge? = null
     private val networkLock = Mutex()
     private val foregroundJobs = mutableSetOf<Job>()
-    private var tab by mutableIntStateOf(1)
+    private var tab by mutableIntStateOf(0)
     private val session = ForegroundSession()
     private var sessionEnabled by mutableStateOf(false)
     private var sessionUnlocked by mutableStateOf(false)
@@ -81,7 +87,7 @@ class MainActivity : FragmentActivity() {
             while (isActive) { now = System.currentTimeMillis(); tickCodes(); delay(250) }
         } }
         runCatching { bridge = PhoneBridge(this); browsers = bridge!!.list() }.onFailure { status = "Device storage unavailable: ${it.message}" }
-        lifecycleScope.launch { repeatOnLifecycle(Lifecycle.State.STARTED) { refresh(false); while (isActive) { delay(2500); if (tab == 1 || browsers.any { !it.optBoolean("active") && it.optLong("expiresAt") > System.currentTimeMillis() }) refresh(false) } } }
+        lifecycleScope.launch { repeatOnLifecycle(Lifecycle.State.STARTED) { refresh(false); while (isActive) { delay(2500); if (tab == 0 || browsers.any { !it.optBoolean("active") && it.optLong("expiresAt") > System.currentTimeMillis() }) refresh(false) } } }
         setContent { BridgeTheme { Screen() } }
     }
     private fun error(message: String) { status = message; busy = false }
@@ -177,11 +183,11 @@ class MainActivity : FragmentActivity() {
         Scaffold(
             bottomBar = {
                 NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
-                    listOf(1, 0, 2).forEach { i ->
-                        val label = listOf("Accounts", "Requests", "Browsers")[i]
+                    listOf(0, 2).forEach { i ->
+                        val label = listOf("Home", "Requests", "Browsers")[i]
                         NavigationBarItem(selected = tab == i, onClick = { tab = i; status = "" },
                             icon = { Icon(listOf(BridgeIcons.Accounts, BridgeIcons.Requests, BridgeIcons.Browser)[i], contentDescription = null) },
-                            label = { Text(if (i == 1 && pending.isNotEmpty()) "Requests · ${pending.size}" else label) })
+                            label = { Text(if (i == 0 && pending.isNotEmpty()) "Home · ${pending.size}" else label) })
                     }
                 }
             },
@@ -189,11 +195,11 @@ class MainActivity : FragmentActivity() {
                 if (tab == 0) FloatingActionButton(onClick = { addMenu = true }, containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary) { Icon(BridgeIcons.Add, contentDescription = "Add account") }
             }
         ) { padding ->
-            Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+            Column(Modifier.padding(padding).fillMaxSize().animateContentSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Column { Text(if (tab == 0) "OTPBridge" else if (tab == 1) "Requests" else "Browsers", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.SemiBold)
-                        Text(if (tab == 0) "Your accounts. Your approval." else if (tab == 1) "Review before you share a code." else "Only devices you trust.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    if (tab == 1) TextButton(enabled = !busy, onClick = { operation { refresh(true) } }) { Text("Refresh") }
+                    Column { Text(if (tab == 0) "OTPBridge" else "Browsers", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+                        Text(if (tab == 0) "Accounts & approvals" else "Only devices you trust.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    if (tab == 0) TextButton(enabled = !busy, onClick = { operation { refresh(true) } }) { Text("Refresh") }
                 }
                 Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
                     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
@@ -206,23 +212,35 @@ class MainActivity : FragmentActivity() {
                 }
                 if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
                 if (status.isNotBlank()) Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(16.dp)) { Text(status, Modifier.padding(16.dp), style = MaterialTheme.typography.bodySmall) }
-                if (pending.isNotEmpty() && tab != 1) Surface(onClick = { tab = 1 }, shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.primaryContainer) { Row(Modifier.fillMaxWidth().padding(18.dp), horizontalArrangement = Arrangement.SpaceBetween) { Text("${pending.size} request${if (pending.size == 1) "" else "s"} waiting", fontWeight = FontWeight.SemiBold); Text("Review →") } }
                 when (tab) {
                     0 -> {
-                        if (needsMigration) Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceVariant) { Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { Text("Update your account list", fontWeight = FontWeight.SemiBold); Text("Unlock once to show names without unlocking codes. Your existing secrets stay unchanged.", style = MaterialTheme.typography.bodySmall); Button(onClick = ::migrateCatalog) { Text("Update with fingerprint") } } }
+                        AnimatedVisibility(visible = pending.isNotEmpty(), enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("REQUESTS · ${pending.size}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                pending.forEach { request -> Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.primaryContainer) {
+                                    Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(request.body.getString("browserName"), style = MaterialTheme.typography.labelMedium); Text("${CodeTiming.secondsRemaining(now, request.body.getLong("expiresAt"))}s left", style = MaterialTheme.typography.labelMedium) }
+                                        Text(request.body.getString("origin").removePrefix("https://"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { Button(enabled = !busy, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp), onClick = { review(request) }) { Text("Review & send") }; TextButton(enabled = !busy, onClick = { operation { network { bridge!!.deny(request) }; refresh(false) } }) { Text("Deny") } }
+                                    }
+                                } }
+                            }
+                        }
+                        Text("ACCOUNTS · ${accounts.size}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (needsMigration) Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceVariant) { Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { Text("Update your account list", fontWeight = FontWeight.SemiBold); Text("Unlock once to show names without unlocking codes. Your existing secrets stay unchanged.", style = MaterialTheme.typography.bodySmall); Button(onClick = ::migrateCatalog) { Text("Update with fingerprint") } } }
                         if (accounts.isNotEmpty()) OutlinedTextField(search, { search = it }, placeholder = { Text("Search accounts") }, modifier = Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(18.dp))
                         if (accounts.isEmpty() && !needsMigration) EmptyState("Your codes, safely kept", "Add your first account with a setup QR or secret key. Names stay visible; codes stay locked.")
                         accounts.filter { search.isBlank() || "${it.issuer} ${it.label}".contains(search, true) }.forEach { a ->
-                            Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface) {
-                                Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface) {
+                                Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                        Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant) { Box(Modifier.size(46.dp), contentAlignment = Alignment.Center) { Text((a.issuer.ifBlank { a.label }).take(1).uppercase(), fontWeight = FontWeight.Bold) } }
-                                        Column(Modifier.weight(1f).padding(horizontal = 14.dp)) { Text(a.issuer.ifBlank { a.label }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold); if (a.issuer.isNotBlank()) Text(a.label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                                        Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant) { Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) { Text((a.issuer.ifBlank { a.label }).take(1).uppercase(), fontWeight = FontWeight.Bold) } }
+                                        Column(Modifier.weight(1f).padding(horizontal = 10.dp)) { Text(a.issuer.ifBlank { a.label }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold); if (a.issuer.isNotBlank()) Text(a.label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                                         Box { IconButton(onClick = { accountMenu = a.id }) { Icon(BridgeIcons.More, contentDescription = "Account options for ${a.label}") }; DropdownMenu(expanded = accountMenu == a.id, onDismissRequest = { accountMenu = null }) { DropdownMenuItem(text = { Text("Delete account") }, onClick = { accountMenu = null; deleteAccount = a }) } }
                                     }
                                     val shown = visibleCodes[a.id]?.takeIf { it.validUntil > now }
                                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                        Text(shown?.code?.chunked(3)?.joinToString(" ") ?: "••• •••", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Medium)
+                                        Text(shown?.code?.chunked(3)?.joinToString(" ") ?: "••• •••", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Medium)
                                         if (shown == null) TextButton(onClick = { showCode(a) }) { Text("Reveal code") }
                                         else Text("${CodeTiming.secondsRemaining(now, shown.validUntil)}s", style = MaterialTheme.typography.titleMedium)
                                     }
@@ -232,23 +250,13 @@ class MainActivity : FragmentActivity() {
                                 }
                             }
                         }
-                        Spacer(Modifier.height(64.dp))
+                        Spacer(Modifier.height(48.dp))
                         Text("Keep your recovery codes somewhere safe. No cloud backup.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    1 -> {
-                        if (pending.isEmpty()) EmptyState("All clear", "Choose Fill from phone in your browser. Keep this screen open to receive the request.")
-                        pending.forEach { request -> Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surface) { Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Text(request.body.getString("browserName"), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(request.body.getString("origin").removePrefix("https://"), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
-                            Text("A one-time code is requested. Nothing is shared until you approve.", style = MaterialTheme.typography.bodyMedium)
-                            Text("Request expires in ${CodeTiming.secondsRemaining(now, request.body.getLong("expiresAt"))}s", style = MaterialTheme.typography.labelLarge)
-                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { Button(enabled = !busy, onClick = { review(request) }) { Text("Choose account") }; TextButton(enabled = !busy, onClick = { operation { network { bridge!!.deny(request) }; refresh(false) } }) { Text("Deny") } }
-                        } } }
                     }
                     2 -> {
                         Button(onClick = { launchScan("pair") }, modifier = Modifier.fillMaxWidth(), contentPadding = PaddingValues(16.dp)) { Text("Pair a browser") }
                         if (browsers.isEmpty()) EmptyState("Connect your browser", "Open the extension settings, create a pairing QR, then scan it here.")
-                        browsers.forEach { d -> Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surface) { Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        browsers.forEach { d -> Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(d.getString("browserName"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                             Text(d.getString("relay").removePrefix("https://"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             if (!d.optBoolean("active")) {
@@ -270,6 +278,11 @@ class MainActivity : FragmentActivity() {
         selectedRequest?.let { request -> AlertDialog(onDismissRequest = { selectedRequest = null }, title = { Text("Share one code") }, text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text(request.body.getString("origin").removePrefix("https://"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
             Text("Requested by ${request.body.getString("browserName")}. Check the website before approving.", style = MaterialTheme.typography.bodySmall)
+            request.body.optJSONObject("context")?.let { context ->
+                Text("Request details", style = MaterialTheme.typography.labelLarge)
+                dev.otpbridge.protocol.RequestContext.lines(context).forEach { line -> Text(line, style = MaterialTheme.typography.bodySmall) }
+                Text("Browser-provided context, not proof of identity. Manage collection in extension settings.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             val ref = request.body.optString("accountRef", "")
             if (needsMigration) { Text("Unlock once to update your existing account names."); TextButton(onClick = ::migrateCatalog) { Text("Update account list") } }
             accounts.filter { ref.isEmpty() || it.id == ref }.forEach { a -> Row(Modifier.fillMaxWidth().clickable { selectedAccount = a.id }, verticalAlignment = Alignment.CenterVertically) { RadioButton(selected = selectedAccount == a.id, onClick = { selectedAccount = a.id }); Column { Text(a.issuer.ifBlank { a.label }, fontWeight = FontWeight.Medium); if (a.issuer.isNotBlank()) Text(a.label, style = MaterialTheme.typography.bodySmall) } } }
@@ -303,7 +316,7 @@ class MainActivity : FragmentActivity() {
         foregroundJobs.toList().forEach { it.cancel() }
         dev.otpbridge.relay.RelayClient.cancelAll()
         vault.cancel()
-        session.lock(); sessionUnlocked = false; visibleCodes = emptyMap(); lastSessionStep = null; tab = 1; selectedRequest = null; selectedAccount = null; deleteAccount = null; accountMenu = null; addMenu = false
+        session.lock(); sessionUnlocked = false; visibleCodes = emptyMap(); lastSessionStep = null; tab = 0; selectedRequest = null; selectedAccount = null; deleteAccount = null; accountMenu = null; addMenu = false
         approveBinding = false; uriInput = ""; enrollment = false; pairQr = null; busy = false
         super.onStop()
     }

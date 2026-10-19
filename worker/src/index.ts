@@ -2,12 +2,17 @@ import { boundedJson, hash, ID, json, randomId } from "./limits";
 export { Mailbox } from "./mailbox";
 export interface Env {
   MAILBOX: DurableObjectNamespace;
+  FCM_SERVICE_ACCOUNT?: string;
 }
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const u = new URL(request.url);
     if (request.method === "GET" && u.pathname === "/health")
-      return json({ ok: true, protocolVersions: [1] });
+      return json({
+        ok: true,
+        protocolVersions: [1],
+        push: !!env.FCM_SERVICE_ACCOUNT,
+      });
     try {
       if (u.pathname === "/v1/channels" && request.method === "POST") {
         const body = await boundedJson(request);
@@ -40,7 +45,7 @@ export default {
         return json({ channelId, browserToken, phoneToken, expiresAt }, 201);
       }
       const match =
-        /^\/v1\/channels\/([^/]+)(\/messages|\/activate|\/diagnostics)?$/.exec(
+        /^\/v1\/channels\/([^/]+)(\/messages|\/activate|\/diagnostics|\/push)?$/.exec(
           u.pathname,
         );
       if (!match || !ID.test(match[1]!))
@@ -50,6 +55,7 @@ export default {
         (suffix === "/messages" && ["GET", "POST"].includes(request.method)) ||
         (suffix === "/activate" && request.method === "POST") ||
         (suffix === "/diagnostics" && request.method === "GET") ||
+        (suffix === "/push" && ["PUT", "DELETE"].includes(request.method)) ||
         (!suffix && request.method === "DELETE")
       ))
         return json({ error: "Method not allowed" }, 405);

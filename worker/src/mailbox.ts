@@ -8,6 +8,7 @@ import {
   MAX_PAYLOAD,
   PAIR_TTL,
 } from "./limits";
+import { FCM_TOKEN, sendWake, type PushEnv } from "./push";
 interface Config {
   browserHash: string;
   phoneHash: string;
@@ -41,14 +42,18 @@ export class Mailbox implements DurableObject {
     if (this.traces.length > 200)
       this.traces.splice(0, this.traces.length - 200);
   }
-  constructor(private readonly state: DurableObjectState) {}
+  constructor(
+    private readonly state: DurableObjectState,
+    private readonly env: PushEnv = {},
+  ) {}
   async fetch(request: Request): Promise<Response> {
     // Never hold the object's concurrency gate while reading an untrusted stream.
     let body: unknown;
     try {
       if (
-        new URL(request.url).pathname === "/messages" &&
-        request.method === "POST"
+        (new URL(request.url).pathname === "/messages" &&
+          request.method === "POST") ||
+        (new URL(request.url).pathname === "/push" && request.method === "PUT")
       )
         body = await boundedJson(request);
     } catch {
@@ -152,6 +157,26 @@ export class Mailbox implements DurableObject {
       await s.setAlarm(now + 120_000);
       return json({ ok: true });
     }
+    if (path === "/push") {
+      // Only the phone registers/removes its own push token for this channel.
+      if (role !== "phone") return json({ error: "Forbidden" }, 403);
+      if (request.method === "DELETE") {
+        await s.delete("push");
+        return new Response(null, { status: 204 });
+      }
+      const b = parsedBody as Record<string, unknown> | undefined;
+      if (
+        request.method !== "PUT" ||
+        !b ||
+        Object.keys(b).join() !== "token" ||
+        typeof b.token !== "string" ||
+        !FCM_TOKEN.test(b.token)
+      )
+        return json({ error: "Invalid push token" }, 400);
+      await s.put("push", { token: b.token, lastSent: 0 });
+      this.trace({ ev: "push.registered", role });
+      return json({ ok: true, enabled: !!this.env.FCM_SERVICE_ACCOUNT });
+    }
     const messages = await s.list<StoredMessage>({ prefix: "msg:" });
     for (const [key, m] of messages)
       if (m.expiresAt <= now) {
@@ -236,6 +261,7 @@ export class Mailbox implements DurableObject {
         msg: m.id.slice(0, 8),
         count: messages.size + 1,
       });
+      if (role === "browser") await this.wakePhone(now);
       return json({ ok: true }, 201);
     }
     if (path === "/messages" && request.method === "GET") {
@@ -265,6 +291,20 @@ export class Mailbox implements DurableObject {
       return json({ messages: visible, cursor: cfg.sequence });
     }
     return json({ error: "Not found" }, 404);
+  }
+  /** Best effort; failures never affect message delivery. At most one push per 5 s. */
+  private async wakePhone(now: number) {
+    const s = this.state.storage;
+    const push = await s.get<{ token: string; lastSent: number }>("push");
+    if (!push || now - push.lastSent < 5_000) return;
+    await s.put("push", { ...push, lastSent: now });
+    const result = await sendWake(
+      this.env,
+      push.token,
+      this.state.id.toString().slice(0, 16),
+    );
+    this.trace({ ev: `push.${result}` });
+    if (result === "unregistered") await s.delete("push");
   }
   async alarm() {
     return this.state.blockConcurrencyWhile(() => this.cleanup());

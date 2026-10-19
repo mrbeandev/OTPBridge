@@ -230,7 +230,7 @@ describe("ciphertext mailbox", () => {
       await (
         await worker.fetch(new Request("https://relay/health"), env)
       ).json(),
-    ).toEqual({ ok: true, protocolVersions: [1] });
+    ).toEqual({ ok: true, protocolVersions: [1], push: false });
     expect(
       (
         await worker.fetch(

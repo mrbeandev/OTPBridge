@@ -154,6 +154,28 @@ class PhoneBridge(context: Context) {
         val u = URI(value)
         u.scheme == "https" && u.host != null && u.userInfo == null && u.rawQuery == null && u.fragment == null && u.path.isNullOrEmpty() && u.toASCIIString() == value && u.host == u.host.lowercase() && u.port != 443
     }.getOrDefault(false)
+    /**
+     * Registers the FCM token with every active relay that hasn't seen this token yet.
+     * Returns how many relays accepted push (relays without the server secret report disabled).
+     */
+    @Synchronized fun registerPush(token: String, force: Boolean = false): Int {
+        operationToken = RelayClient.foregroundToken()
+        require(token.length in 100..4096)
+        var enabled = 0
+        for (d in internalDevices().toList()) {
+            if (!d.optBoolean("active")) continue
+            if (!force && d.optString("pushToken") == token) { if (d.optBoolean("pushEnabled")) enabled++; continue }
+            checkForeground()
+            try {
+                val r = client(d).registerPush(token)
+                val on = r.optBoolean("enabled", false)
+                if (internalDevices().any { it === d }) durable { d.put("pushToken", token); d.put("pushEnabled", on) }
+                if (on) enabled++
+                Telemetry.track("push.relay-registered", "enabled" to on)
+            } catch (e: CancellationException) { throw e } catch (e: Exception) { Telemetry.track("push.relay-register-failed", "error" to (e.message ?: e.javaClass.simpleName)) }
+        }
+        return enabled
+    }
     @Synchronized fun refresh(allowed: () -> Boolean = { true }): List<String> {
         operationToken = RelayClient.foregroundToken()
         val errors = mutableListOf<String>()

@@ -5,6 +5,9 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
+// Push is optional: builds without google-services.json (forks, CI) simply have no push.
+val hasFirebaseConfig = file("google-services.json").exists()
+if (hasFirebaseConfig) apply(plugin = "com.google.gms.google-services")
 android {
     namespace = "dev.otpbridge"
     compileSdk = 35
@@ -12,8 +15,8 @@ android {
         applicationId = "dev.otpbridge"
         minSdk = 29
         targetSdk = 35
-        versionCode = 13
-        versionName = "1.0.0"
+        versionCode = 14
+        versionName = "1.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     // Release signing comes from a git-ignored properties file (or env var path).
@@ -36,6 +39,7 @@ android {
         }
     }
     buildFeatures { compose = true; buildConfig = true }
+    defaultConfig { buildConfigField("boolean", "PUSH_CONFIGURED", hasFirebaseConfig.toString()) }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
     packaging { resources.excludes += setOf("META-INF/AL2.0", "META-INF/LGPL2.1") }
@@ -52,6 +56,8 @@ dependencies {
     implementation("com.goterl:lazysodium-android:5.2.0@aar")
     implementation("net.java.dev.jna:jna:5.17.0@aar")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
+    implementation("com.google.firebase:firebase-messaging")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250517")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")

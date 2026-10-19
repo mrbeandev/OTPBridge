@@ -55,4 +55,5 @@ class RelayClient(private val relay: String, private val channel: String, privat
     fun post(message: JSONObject) = request("POST", "/messages", message)
     fun fetch(cursor: Long) = request("GET", "/messages?after=$cursor")
     fun revoke() = request("DELETE")
+    fun registerPush(token: String) = request("PUT", "/push", JSONObject().put("token", token))
 }

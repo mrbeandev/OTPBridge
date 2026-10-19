@@ -55,6 +55,8 @@ class MainActivity : FragmentActivity() {
     private var sessionEnabled by mutableStateOf(false)
     private var maskAllCodes by mutableStateOf(false)
     private var diagnosticsOpen by mutableStateOf(false)
+    private var notifState by mutableStateOf("ok") // ok | ask | blocked
+    private var notifPromptDismissed by mutableStateOf(false)
     private var editAccount by mutableStateOf<AccountSummary?>(null)
     private var importOpen by mutableStateOf(false)
     private var importEntries by mutableStateOf<List<dev.otpbridge.totp.AuthenticatorImport.Entry>>(emptyList())
@@ -130,6 +132,38 @@ class MainActivity : FragmentActivity() {
             importDecoding = false
         }
     }
+    private val notifPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        getSharedPreferences("push", MODE_PRIVATE).edit().putBoolean("askedOnce", true).apply()
+        Telemetry.track("push.permission", "granted" to granted)
+        checkNotifications()
+    }
+    /** Re-evaluated on every app open: granted, can ask again, or blocked (needs Settings). */
+    private fun checkNotifications() {
+        dev.otpbridge.push.Notifications.ensureChannel(this)
+        notifState = when {
+            dev.otpbridge.push.Notifications.enabled(this) -> "ok"
+            android.os.Build.VERSION.SDK_INT >= 33 && !dev.otpbridge.push.Notifications.permissionGranted(this) &&
+                (!getSharedPreferences("push", MODE_PRIVATE).getBoolean("askedOnce", false) || shouldShowRequestPermissionRationale(android.Manifest.permission.POST_NOTIFICATIONS)) -> "ask"
+            else -> "blocked"
+        }
+    }
+    private fun requestNotifications() {
+        if (notifState == "ask" && android.os.Build.VERSION.SDK_INT >= 33) notifPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        else startActivity(android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, packageName))
+    }
+    /** Fetch the FCM token (cached or fresh) and register it with paired relays. Foreground only. */
+    private fun syncPush() {
+        if (!BuildConfig.PUSH_CONFIGURED) return
+        val prefs = getSharedPreferences("push", MODE_PRIVATE)
+        runCatching { com.google.firebase.messaging.FirebaseMessaging.getInstance().token }.getOrNull()?.addOnSuccessListener { token ->
+            val dirty = prefs.getBoolean("dirty", false) || prefs.getString("token", null) != token
+            prefs.edit().putString("token", token).apply()
+            operation {
+                network { bridge?.registerPush(token, force = dirty) }
+                prefs.edit().putBoolean("dirty", false).apply()
+            }
+        }?.addOnFailureListener { Telemetry.track("push.token-failed", "error" to (it.message ?: it.javaClass.simpleName)) }
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (!BuildConfig.DEBUG) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
@@ -146,7 +180,7 @@ class MainActivity : FragmentActivity() {
             while (isActive) { now = System.currentTimeMillis(); tickCodes(); delay(250) }
         } }
         runCatching { bridge = PhoneBridge(this); browsers = bridge!!.list() }.onFailure { status = "Device storage unavailable: ${it.message}" }
-        lifecycleScope.launch { repeatOnLifecycle(Lifecycle.State.STARTED) { refresh(false); while (isActive) { delay(2500); if (tab == 0 || browsers.any { !it.optBoolean("active") && it.optLong("expiresAt") > System.currentTimeMillis() }) refresh(false) } } }
+        lifecycleScope.launch { repeatOnLifecycle(Lifecycle.State.STARTED) { refresh(false); syncPush(); while (isActive) { delay(2500); if (tab == 0 || browsers.any { !it.optBoolean("active") && it.optLong("expiresAt") > System.currentTimeMillis() }) refresh(false) } } }
         setContent { BridgeTheme { Screen() } }
     }
     private fun error(message: String) { status = message; busy = false }
@@ -282,6 +316,16 @@ class MainActivity : FragmentActivity() {
                             Switch(checked = sessionEnabled, onCheckedChange = ::setSessionMode)
                         }
                         if (sessionEnabled && !sessionUnlocked) TextButton(onClick = ::unlockSession) { Text("Unlock session") }
+                    }
+                }
+                if (tab == 0 && notifState != "ok" && !notifPromptDismissed) Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(if (notifState == "blocked") "Notifications are blocked" else "Turn on notifications", fontWeight = FontWeight.Medium)
+                        Text(if (notifState == "blocked") "You won't know when a browser asks for a code unless you open the app. Allow notifications for OTPBridge in Settings." else "Get alerted when a browser asks for a code. Notifications never show the code itself.", style = MaterialTheme.typography.bodySmall)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = ::requestNotifications, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)) { Text(if (notifState == "blocked") "Open settings" else "Allow") }
+                            TextButton(onClick = { notifPromptDismissed = true }) { Text("Not now") }
+                        }
                     }
                 }
                 if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -674,7 +718,11 @@ class MainActivity : FragmentActivity() {
             if (uriInput.isNotEmpty()) enroll() else try { val a = Totp.validate(TotpAccount(label, issuer, secret, algorithm, digits.toInt(), period.toInt())); vault.unlock(this@MainActivity, "Add ${a.label}", ::error) { key -> vault.add(key, a); enrollment = false; loadCatalog(); status = "Account added. Codes stay locked." } } catch (e: Exception) { error(e.message ?: "Invalid account") }
         }) { Text("Save with biometrics") } }, dismissButton = { TextButton(onClick = { enrollment = false; uriInput = "" }) { Text("Cancel") } })
     }
-    override fun onStart() { dev.otpbridge.relay.RelayClient.resumeForeground(); Telemetry.track("app.foreground"); super.onStart() }
+    override fun onStart() {
+        dev.otpbridge.relay.RelayClient.resumeForeground(); Telemetry.track("app.foreground"); super.onStart()
+        checkNotifications(); dev.otpbridge.push.Notifications.clear(this)
+        if (notifState == "ask" && !getSharedPreferences("push", MODE_PRIVATE).getBoolean("askedOnce", false)) requestNotifications()
+    }
     override fun onStop() {
         Telemetry.track("app.background")
         foregroundJobs.toList().forEach { it.cancel() }

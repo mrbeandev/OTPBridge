@@ -2,7 +2,8 @@
 // They never receive device keys, relay credentials or account data.
 export function captureTarget(
   useContext: boolean,
-): { fieldToken: string; origin: string } | null {
+  menuOnEditable = false,
+): { fieldToken: string; origin: string; how: string } | null {
   const w = window as unknown as {
     __otpbridge?: {
       last: Element | null;
@@ -30,14 +31,26 @@ export function captureTarget(
     );
     state.listening = true;
   }
-  // activeTab is granted after the first menu click, too late to observe that
-  // right-click. Fail closed: install the listener and require one more right-click.
-  // Never guess that the focused field is the field the user actually clicked.
-  const candidate = useContext
-    ? Date.now() - state.lastAt < 30_000
-      ? state.last
-      : null
-    : document.activeElement;
+  // The contextmenu listener can only exist after our first injection, so the
+  // first right-click on a (re)loaded page is never observed. Chrome reports
+  // menuOnEditable when the menu opened on an editable control, and a
+  // right-click on an input focuses it, so the focused input is the clicked one.
+  // A recorded trusted right-click still takes priority when available.
+  const remembered =
+    useContext && Date.now() - state.lastAt < 30_000 ? state.last : null;
+  const focused = document.activeElement;
+  let how = "none";
+  let candidate: Element | null = null;
+  if (!useContext) {
+    candidate = focused;
+    how = "focused";
+  } else if (remembered) {
+    candidate = remembered;
+    how = "remembered";
+  } else if (menuOnEditable && focused instanceof HTMLInputElement) {
+    candidate = focused;
+    how = "editable-focus";
+  }
   if (
     !(candidate instanceof HTMLInputElement) ||
     candidate.disabled ||
@@ -54,7 +67,7 @@ export function captureTarget(
   state.targets.clear();
   state.targets.set(token, { element: candidate, value: candidate.value });
   state.last = null;
-  return { fieldToken: token, origin: location.origin };
+  return { fieldToken: token, origin: location.origin, how };
 }
 export function fillTarget(
   token: string,

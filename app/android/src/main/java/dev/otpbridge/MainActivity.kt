@@ -80,6 +80,8 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (!BuildConfig.DEBUG) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        Telemetry.init(this)
+        Telemetry.track("app.create")
         vault = Vault(this)
         loadCatalog()
         sessionEnabled = getSharedPreferences("preferences", MODE_PRIVATE).getBoolean("foregroundSession", false)
@@ -100,7 +102,7 @@ class MainActivity : FragmentActivity() {
     private suspend fun refresh(showStatus: Boolean) {
         val b = bridge ?: return
         val job = currentCoroutineContext()[Job]
-        try { val result = network { val errors = b.refresh { job?.isActive == true && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) }; Triple(b.list(), b.pendingRequests(), errors) }; browsers = result.first; pending = result.second; selectedRequest?.let { reviewed -> if (pending.none { it.key == reviewed.key && it.body.toString() == reviewed.body.toString() }) { selectedRequest = null; selectedAccount = null; approveBinding = false } }; if (result.third.isNotEmpty()) status = result.third.joinToString("\n"); else if (showStatus) status = "Fetched ${pending.size} pending request(s)." } catch (e: CancellationException) { throw e } catch (e: Exception) { status = "Refresh failed: ${e.message}" }
+        try { val result = network { val errors = b.refresh { job?.isActive == true && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) }; Triple(b.list(), b.pendingRequests(), errors) }; browsers = result.first; if (result.second.size != pending.size) Telemetry.track("ui.pending", "count" to result.second.size); pending = result.second; selectedRequest?.let { reviewed -> if (pending.none { it.key == reviewed.key && it.body.toString() == reviewed.body.toString() }) { selectedRequest = null; selectedAccount = null; approveBinding = false } }; if (result.third.isNotEmpty()) status = result.third.joinToString("\n"); else if (showStatus) status = "Fetched ${pending.size} pending request(s)." } catch (e: CancellationException) { throw e } catch (e: Exception) { Telemetry.track("ui.refresh-failed", "error" to (e.message ?: e.javaClass.simpleName)); status = "Refresh failed: ${e.message}" }
     }
     private fun loadCatalog() {
         lastSessionStep = null
@@ -175,6 +177,7 @@ class MainActivity : FragmentActivity() {
                     val current = vault.accounts(authorizedKey).firstOrNull { it.id == accountId }?.account ?: throw IllegalStateException("Account unavailable")
                     val otp = Totp.generate(current, System.currentTimeMillis() / 1000)
                     network { bridge!!.approve(request, accountId, otp, validFrom, validUntil) }
+                    Telemetry.track("approve.sent", "req" to Telemetry.short(request.body.optString("requestId")), "remainingMs" to (validUntil - System.currentTimeMillis()))
                 } finally { authorizedKey.fill(0) }
                 status = "Approved code sent. The browser validates the original field before filling."; refresh(false)
             }
@@ -256,6 +259,10 @@ class MainActivity : FragmentActivity() {
                     }
                     2 -> {
                         Button(onClick = { launchScan("pair") }, modifier = Modifier.fillMaxWidth(), contentPadding = PaddingValues(16.dp)) { Text("Pair a browser") }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = { val log = Telemetry.read(); startActivity(android.content.Intent.createChooser(android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain").putExtra(android.content.Intent.EXTRA_SUBJECT, "OTPBridge diagnostics").putExtra(android.content.Intent.EXTRA_TEXT, log.ifBlank { "No events yet." }.takeLast(90_000)), "Share diagnostics")) }) { Text("Share diagnostics") }
+                            TextButton(onClick = { Telemetry.clear(); status = "Diagnostics cleared." }) { Text("Clear") }
+                        }
                         if (browsers.isEmpty()) EmptyState("Connect your browser", "Open the extension settings, create a pairing QR, then scan it here.")
                         browsers.forEach { d -> Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(d.getString("browserName"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
@@ -290,25 +297,68 @@ class MainActivity : FragmentActivity() {
                 }
             }
         }
-        selectedRequest?.let { request -> ModalBottomSheet(onDismissRequest = { selectedRequest = null }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = MaterialTheme.colorScheme.surface) { Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 24.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("SHARE ONE CODE", style = MaterialTheme.typography.labelMedium)
-            Text(request.body.getString("origin").removePrefix("https://"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-            Text("Requested by ${request.body.getString("browserName")}. Check the website before approving.", style = MaterialTheme.typography.bodySmall)
-            request.body.optJSONObject("context")?.let { context ->
-                Text("Request details", style = MaterialTheme.typography.labelLarge)
-                dev.otpbridge.protocol.RequestContext.lines(context).forEach { line -> Text(line, style = MaterialTheme.typography.bodySmall) }
-                context.optJSONObject("location")?.let { dev.otpbridge.ui.LocationPreview(it) }
-                Text("Browser-provided context, not proof of identity. Manage collection in extension settings.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        selectedRequest?.let { request -> ReviewSheet(request) }
+    }
+    @Composable private fun ReviewSheet(request: PhoneBridge.Pending) {
+        var showDetails by remember(request.key) { mutableStateOf(false) }
+        val body = request.body
+        val context = body.optJSONObject("context")
+        val device = context?.optJSONObject("device"); val browser = context?.optJSONObject("browser"); val location = context?.optJSONObject("location")
+        val left = CodeTiming.secondsRemaining(now, body.getLong("expiresAt"))
+        val ref = body.optString("accountRef", "")
+        val choices = accounts.filter { ref.isEmpty() || it.id == ref }
+        ModalBottomSheet(onDismissRequest = { selectedRequest = null }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = MaterialTheme.colorScheme.surface, dragHandle = { BottomSheetDefaults.DragHandle() }) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(body.getString("origin").removePrefix("https://"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                        Text(listOfNotNull(body.getString("browserName"), browser?.let { "${it.getString("name")} ${it.getString("version").substringBefore('.')}" }, device?.optString("os")?.takeIf { it.isNotBlank() }).joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                    }
+                    Surface(shape = RoundedCornerShape(50), color = if (left <= 15) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.surfaceVariant) {
+                        Text("${left}s", Modifier.padding(horizontal = 12.dp, vertical = 6.dp), style = MaterialTheme.typography.labelLarge, color = if (left <= 15) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.onSurface)
+                    }
+                }
+                if (context != null) {
+                    Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth().clickable { showDetails = !showDetails }) {
+                        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Row(Modifier.fillMaxWidth()) {
+                                Text(listOfNotNull(context.optString("publicIp").takeIf { it.isNotBlank() }?.let { "IP $it" }, location?.let { locationSummary(it) }).joinToString("  ·  ").ifBlank { "Request details" }, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, maxLines = 1)
+                                Text(if (showDetails) "Hide" else "Details", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+                    }
+                    AnimatedVisibility(showDetails) {
+                        Column(Modifier.fillMaxWidth().heightIn(max = 300.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            dev.otpbridge.protocol.RequestContext.lines(context).forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
+                            location?.let { dev.otpbridge.ui.LocationPreview(it) }
+                            Text("Browser-provided context, not proof of identity.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+                if (needsMigration) TextButton(onClick = ::migrateCatalog) { Text("Unlock once to update account list") }
+                if (choices.isEmpty() && !needsMigration) Text("Add an authenticator account first.", style = MaterialTheme.typography.bodyMedium)
+                Column(Modifier.fillMaxWidth().heightIn(max = 168.dp).verticalScroll(rememberScrollState())) {
+                    choices.forEach { a ->
+                        val selected = selectedAccount == a.id
+                        Surface(shape = RoundedCornerShape(12.dp), color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp).clickable { selectedAccount = a.id }) {
+                            Row(Modifier.padding(horizontal = 4.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                                RadioButton(selected = selected, onClick = { selectedAccount = a.id })
+                                Column(Modifier.weight(1f)) { Text(a.issuer.ifBlank { a.label }, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 1); if (a.issuer.isNotBlank()) Text(a.label, style = MaterialTheme.typography.bodySmall, maxLines = 1) }
+                                Text("${CodeTiming.secondsRemaining(now, CodeTiming.validUntil(now, a.period))}s", style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(end = 8.dp))
+                            }
+                        }
+                    }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { val r = request; selectedRequest = null; operation { network { bridge!!.deny(r) }; refresh(false) } }, modifier = Modifier.weight(1f)) { Text("Deny") }
+                    Button(enabled = selectedAccount != null && !busy && left > 0, modifier = Modifier.weight(2f), onClick = ::approve) { Text(if (sessionEnabled && sessionUnlocked) "Send code" else "Approve with fingerprint") }
+                }
             }
-            val ref = request.body.optString("accountRef", "")
-            if (needsMigration) { Text("Unlock once to update your existing account names."); TextButton(onClick = ::migrateCatalog) { Text("Update account list") } }
-            accounts.filter { ref.isEmpty() || it.id == ref }.forEach { a -> Row(Modifier.fillMaxWidth().clickable { selectedAccount = a.id }, verticalAlignment = Alignment.CenterVertically) { RadioButton(selected = selectedAccount == a.id, onClick = { selectedAccount = a.id }); Column { Text(a.issuer.ifBlank { a.label }, fontWeight = FontWeight.Medium); if (a.issuer.isNotBlank()) Text(a.label, style = MaterialTheme.typography.bodySmall) } } }
-            if (accounts.isEmpty() && !needsMigration) Text("Add an authenticator account first.")
-            selectedAccount?.let { id -> accounts.firstOrNull { it.id == id }?.let { a -> Text("${CodeTiming.secondsRemaining(now, CodeTiming.validUntil(now, a.period))}s until next code", style = MaterialTheme.typography.labelLarge) } }
-            Text("Request expires in ${CodeTiming.secondsRemaining(now, request.body.getLong("expiresAt"))}s. Only this code is shared; your secret stays here.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Button(enabled = selectedAccount != null && !busy && request.body.getLong("expiresAt") > now, modifier = Modifier.fillMaxWidth(), onClick = ::approve) { Text(if (sessionEnabled && sessionUnlocked) "Send code" else "Approve with fingerprint") }
-            TextButton(modifier = Modifier.fillMaxWidth(), onClick = { selectedRequest = null }) { Text("Cancel") }
-        } } }
+        }
+    }
+    private fun locationSummary(l: JSONObject): String {
+        val acc = l.getDouble("accuracyMeters")
+        return when { acc <= 100 -> "Location ±${acc.toInt()} m"; acc <= 5000 -> "Location ±${"%.1f".format(acc / 1000)} km"; else -> "Approx. area ±${(acc / 1000).toInt()} km" }
     }
     private fun launchScan(mode: String) {
         scanMode = mode
@@ -330,8 +380,9 @@ class MainActivity : FragmentActivity() {
             if (uriInput.isNotEmpty()) enroll() else try { val a = Totp.validate(TotpAccount(label, issuer, secret, algorithm, digits.toInt(), period.toInt())); vault.unlock(this@MainActivity, "Add ${a.label}", ::error) { key -> vault.add(key, a); enrollment = false; loadCatalog(); status = "Account added. Codes stay locked." } } catch (e: Exception) { error(e.message ?: "Invalid account") }
         }) { Text("Save with biometrics") } }, dismissButton = { TextButton(onClick = { enrollment = false; uriInput = "" }) { Text("Cancel") } })
     }
-    override fun onStart() { dev.otpbridge.relay.RelayClient.resumeForeground(); super.onStart() }
+    override fun onStart() { dev.otpbridge.relay.RelayClient.resumeForeground(); Telemetry.track("app.foreground"); super.onStart() }
     override fun onStop() {
+        Telemetry.track("app.background")
         foregroundJobs.toList().forEach { it.cancel() }
         dev.otpbridge.relay.RelayClient.cancelAll()
         vault.cancel()

@@ -27,6 +27,7 @@ import { captureTarget, fillTarget } from "../content/target";
 import { expiryBadge, remainingSeconds } from "./countdown";
 import { probeRelay, type RelayHealth } from "./relay-status";
 import { bestEffortContext } from "./request-context";
+import { track, short, readTelemetry, clearTelemetry } from "../telemetry";
 let chain: Promise<unknown> = Promise.resolve();
 function exclusive<T>(fn: () => Promise<T>): Promise<T> {
   const task = chain.then(fn, fn);
@@ -168,8 +169,10 @@ async function capture(
   tabId: number,
   frameId: number,
   useContext: boolean,
+  editable = false,
 ): Promise<Target> {
   const tab = await chrome.tabs.get(tabId);
+  track("capture.start", { tabId, frameId, useContext, hasUrl: !!tab.url });
   if (!tab.url) throw new Error("Cannot access this page");
   const origin = new URL(tab.url).origin;
   if (!validOrigin(origin))
@@ -177,13 +180,20 @@ async function capture(
   const results = await chrome.scripting.executeScript({
     target: { tabId, frameIds: [frameId] },
     func: captureTarget,
-    args: [useContext],
+    args: [useContext, editable],
   });
   const hit = results[0];
+  track("capture.result", {
+    found: !!hit?.result,
+    how: hit?.result?.how ?? null,
+    hasDocument: !!hit?.documentId,
+    originMatch: hit?.result?.origin === origin,
+    reason: hit?.result ? null : "no-target",
+  });
   if (!hit?.result || !hit.documentId || hit.result.origin !== origin)
     throw new Error(
       useContext
-        ? "Right-click the same input once more (first use grants page access), or focus it and press Alt+Shift+O. Unsupported/cross-origin fields are rejected."
+        ? "Couldn't identify that field. Click into the OTP input, then choose Fill from phone again (or press Alt+Shift+O)."
         : "Focus a supported OTP input first. Cross-origin frames are not supported.",
     );
   return {
@@ -198,8 +208,16 @@ async function requestFill(
   tabId: number,
   frameId: number,
   useContext: boolean,
+  editable = false,
 ) {
   const s = await load();
+  track("request.begin", {
+    paired: !!s.device,
+    pending: !!s.pending,
+    pendingExpired: s.pending
+      ? s.pending.request.expiresAt <= Date.now()
+      : null,
+  });
   if (!s.device) throw new Error("Pair your phone in OTPBridge settings first");
   if (s.pending && s.pending.request.expiresAt <= Date.now()) {
     delete s.pending;
@@ -207,9 +225,14 @@ async function requestFill(
   }
   if (s.pending)
     throw new Error("Cancel the current request before starting another");
-  const target = await capture(tabId, frameId, useContext);
+  const target = await capture(tabId, frameId, useContext, editable);
   // Context is best-effort: permission/provider failure cannot gate OTP delivery.
+  const contextStarted = Date.now();
   const context = await bestEffortContext();
+  track("context.done", {
+    ms: Date.now() - contextStarted,
+    fields: Object.keys(context).join(","),
+  });
   const now = Date.now(),
     d = s.device;
   const request: FillRequest = {
@@ -234,6 +257,11 @@ async function requestFill(
   s.status = "Open OTPBridge on your phone to approve.";
   delete s.error;
   await save(s);
+  track("request.created", {
+    req: short(request.requestId),
+    origin: target.origin,
+    hasAccountRef: !!request.accountRef,
+  });
   schedule();
   await poll(s);
   await save(s);
@@ -254,15 +282,34 @@ async function poll(s: State) {
   }
   const c = client(d);
   if (!p.sent) {
+    const sendStarted = Date.now();
     try {
       await c.send(p.outbound);
+      track("relay.send.ok", {
+        req: short(p.request.requestId),
+        msg: short(p.outbound.id),
+        ms: Date.now() - sendStarted,
+      });
     } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      track("relay.send.error", {
+        req: short(p.request.requestId),
+        msg: short(p.outbound.id),
+        ms: Date.now() - sendStarted,
+        error: message,
+      });
       if (!(e instanceof Error) || !e.message.includes("409")) throw e;
     }
     p.sent = true;
     await save(s);
   }
   const batch = await c.poll(d.cursor);
+  if (batch.messages.length)
+    track("relay.poll", {
+      req: short(p.request.requestId),
+      count: batch.messages.length,
+      cursor: batch.cursor,
+    });
   for (const t of batch.messages) {
     if (d.seen[t.id]) continue;
     let m: Message;
@@ -279,6 +326,7 @@ async function poll(s: State) {
       break;
     }
     if (m.requestId !== p.request.requestId) continue;
+    track("phone.reply", { req: short(m.requestId), type: m.type });
     if (m.type === "fill.denied") {
       delete s.pending;
       s.status = "Request denied on phone.";
@@ -287,7 +335,11 @@ async function poll(s: State) {
     if (m.type === "fill.approved") {
       try {
         assertApproval(p.request, m);
-      } catch {
+      } catch (e) {
+        track("approval.rejected", {
+          req: short(m.requestId),
+          error: e instanceof Error ? e.message : String(e),
+        });
         s.error = "Rejected a mismatched or stale approval.";
         continue;
       }
@@ -308,6 +360,10 @@ async function poll(s: State) {
           p.request.expiresAt,
           m.validUntil,
         ],
+      });
+      track("fill.result", {
+        req: short(p.request.requestId),
+        filled: !!results[0]?.result,
       });
       if (!results[0]?.result)
         throw new Error(
@@ -339,6 +395,10 @@ function schedule() {
           failures = 0;
         } catch (e) {
           failures = Math.min(failures + 1, 4);
+          track("poll.error", {
+            failures,
+            error: e instanceof Error ? e.message : String(e),
+          });
           s.error = e instanceof Error ? e.message : "Relay unavailable";
         } finally {
           await save(s);
@@ -522,6 +582,19 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, respond) => {
       ) {
         await startPair(m.relay, m.browserName);
         schedule();
+      } else if (m.type === "telemetry") {
+        const s = await load();
+        let relay: unknown = null;
+        if (s.device) {
+          try {
+            relay = await client(s.device).diagnostics();
+          } catch (e) {
+            relay = { error: e instanceof Error ? e.message : String(e) };
+          }
+        }
+        return { ...(await status()), telemetry: await readTelemetry(), relay };
+      } else if (m.type === "clearTelemetry") {
+        await clearTelemetry();
       } else if (m.type === "cancel") {
         const s = await load(),
           pending = s.pending,
@@ -583,12 +656,30 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, respond) => {
   }).then(respond);
   return true;
 });
-function launch(tabId: number, frameId: number, useContext: boolean) {
+function launch(
+  tabId: number,
+  frameId: number,
+  useContext: boolean,
+  editable = true,
+) {
+  const clicked = Date.now();
+  track("launch", {
+    source: useContext ? "context-menu" : "shortcut",
+    tabId,
+    frameId,
+    editable,
+  });
   void exclusive(async () => {
+    track("launch.dequeued", { waitedMs: Date.now() - clicked });
     await ready;
     try {
-      await requestFill(tabId, frameId, useContext);
+      await requestFill(tabId, frameId, useContext, editable);
+      track("launch.done", { ms: Date.now() - clicked });
     } catch (e) {
+      track("launch.failed", {
+        ms: Date.now() - clicked,
+        error: e instanceof Error ? e.message : String(e),
+      });
       const s = await load();
       s.error = e instanceof Error ? e.message : "Request failed";
       await save(s);
@@ -600,7 +691,7 @@ function launch(tabId: number, frameId: number, useContext: boolean) {
 }
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === "otpbridge-fill" && tab?.id !== undefined)
-    launch(tab.id, info.frameId ?? 0, true);
+    launch(tab.id, info.frameId ?? 0, true, info.editable);
 });
 chrome.commands.onCommand.addListener((command, tab) => {
   if (command === "fill-from-phone" && tab?.id !== undefined)

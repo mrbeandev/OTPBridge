@@ -9,11 +9,9 @@ it("permission API rejection falls back to a core domain-only request", async ()
   vi.stubGlobal("chrome", {
     storage: {
       local: {
-        get: vi
-          .fn()
-          .mockResolvedValue({
-            contextPreferences: { device: false, browser: false },
-          }),
+        get: vi.fn().mockResolvedValue({
+          contextPreferences: { device: false, browser: false },
+        }),
       },
     },
     permissions: {

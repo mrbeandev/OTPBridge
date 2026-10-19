@@ -220,3 +220,15 @@ kbd {
     font-size: 32px;
   }
 }
+
+.telemetry {
+  max-height: 320px;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.5;
+  background: var(--soft);
+  border-radius: 10px;
+  padding: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}

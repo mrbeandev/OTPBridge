@@ -4,6 +4,7 @@ import QRCode from "qrcode";
 import { normalizeRelay } from "@otpbridge/protocol";
 import "../style.css";
 import { ContextSettings } from "./ContextSettings";
+import { Diagnostics } from "./Diagnostics";
 function App() {
   const [relay, setRelay] = useState(""),
     [name, setName] = useState("Laptop"),
@@ -200,6 +201,7 @@ function App() {
         )}
       </section>
       <ContextSettings />
+      <Diagnostics />
       <section aria-live="polite">
         <h2>Status</h2>
         <p>{s.status}</p>

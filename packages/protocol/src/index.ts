@@ -521,6 +521,10 @@ export class RelayClient {
   activate() {
     return this.call("/activate", { method: "POST" });
   }
+  /** Relay-side metadata traces for this channel (no payloads). */
+  diagnostics(): Promise<unknown> {
+    return this.call("/diagnostics");
+  }
   revoke() {
     return this.call("", { method: "DELETE" });
   }

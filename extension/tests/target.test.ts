@@ -30,9 +30,38 @@ describe("guarded field insertion", () => {
     expect(submits).toBe(0);
     expect(fillTarget(t.fieldToken, t.origin, "012345")).toBe(false);
   });
-  it("does not guess first right-click target", () => {
+  it("does not guess when the menu was not opened on an editable field", () => {
     document.querySelector("input")!.focus();
-    expect(captureTarget(true)).toBe(null);
+    expect(captureTarget(true, false)).toBe(null);
+  });
+  it("resolves the first right-click on an editable field without a second click", () => {
+    const input = document.querySelector("input")!;
+    input.focus();
+    const t = captureTarget(true, true)!;
+    expect(t.how).toBe("editable-focus");
+    expect(fillTarget(t.fieldToken, t.origin, "012345")).toBe(true);
+    expect(input.value).toBe("012345");
+  });
+  it("prefers a recorded trusted right-click target over focus", () => {
+    document.body.innerHTML = '<input id="a"><input id="b">';
+    const [a, b] = [...document.querySelectorAll("input")];
+    captureTarget(true, false); // installs listener
+    a!.focus();
+    // Synthetic events are untrusted and ignored; seed what a real trusted
+    // right-click on `b` records.
+    const state = (window as any).__otpbridge;
+    state.last = b; state.lastAt = Date.now();
+    const t = captureTarget(true, true)!;
+    expect(t.how).toBe("remembered");
+    expect(fillTarget(t.fieldToken, t.origin, "012345")).toBe(false); // b is not focused
+  });
+  it("ignores untrusted synthetic contextmenu events", () => {
+    document.body.innerHTML = '<input id="a"><input id="b">';
+    const [a, b] = [...document.querySelectorAll("input")];
+    captureTarget(true, false);
+    a!.focus();
+    b!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
+    expect(captureTarget(true, true)!.how).toBe("editable-focus");
   });
   it("rejects changed value, lost focus, detached field and wrong origin", () => {
     for (const mutate of [

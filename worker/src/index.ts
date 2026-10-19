@@ -39,15 +39,17 @@ export default {
         if (!initialized.ok) return json({ error: "Unavailable" }, 503);
         return json({ channelId, browserToken, phoneToken, expiresAt }, 201);
       }
-      const match = /^\/v1\/channels\/([^/]+)(\/messages|\/activate)?$/.exec(
-        u.pathname,
-      );
+      const match =
+        /^\/v1\/channels\/([^/]+)(\/messages|\/activate|\/diagnostics)?$/.exec(
+          u.pathname,
+        );
       if (!match || !ID.test(match[1]!))
         return json({ error: "Not found" }, 404);
       const suffix = match[2] ?? "";
       if (!(
         (suffix === "/messages" && ["GET", "POST"].includes(request.method)) ||
         (suffix === "/activate" && request.method === "POST") ||
+        (suffix === "/diagnostics" && request.method === "GET") ||
         (!suffix && request.method === "DELETE")
       ))
         return json({ error: "Method not allowed" }, 405);

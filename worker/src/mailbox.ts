@@ -22,7 +22,25 @@ interface StoredMessage {
   payload: string;
   role: "browser" | "phone";
 }
+type Trace = {
+  t: number;
+  ev: string;
+  role?: string;
+  status?: number;
+  detail?: string;
+  count?: number;
+  seq?: number;
+  msg?: string;
+};
 export class Mailbox implements DurableObject {
+  // In-memory only: no storage writes, so diagnostics never consume quota.
+  // Metadata only (role/status/sequence/id prefix) — never payloads or tokens.
+  private traces: Trace[] = [];
+  private trace(t: Omit<Trace, "t">) {
+    this.traces.push({ t: Date.now(), ...t });
+    if (this.traces.length > 200)
+      this.traces.splice(0, this.traces.length - 200);
+  }
   constructor(private readonly state: DurableObjectState) {}
   async fetch(request: Request): Promise<Response> {
     // Never hold the object's concurrency gate while reading an untrusted stream.
@@ -95,7 +113,10 @@ export class Mailbox implements DurableObject {
     const token = request.headers
       .get("Authorization")
       ?.match(/^Bearer ([A-Za-z0-9_-]{43})$/)?.[1];
-    if (!token) return json({ error: "Unauthorized" }, 401);
+    if (!token) {
+      this.trace({ ev: "auth.missing", status: 401, detail: path });
+      return json({ error: "Unauthorized" }, 401);
+    }
     const digest = await hash(token);
     const role =
       digest === cfg.browserHash
@@ -103,8 +124,20 @@ export class Mailbox implements DurableObject {
         : digest === cfg.phoneHash
           ? "phone"
           : undefined;
-    if (!role) return json({ error: "Unauthorized" }, 401);
+    if (!role) {
+      this.trace({ ev: "auth.rejected", status: 401, detail: path });
+      return json({ error: "Unauthorized" }, 401);
+    }
+    if (path === "/diagnostics" && request.method === "GET")
+      return json({
+        now,
+        active: cfg.active,
+        sequence: cfg.sequence,
+        expiresAt: cfg.expiresAt,
+        traces: this.traces,
+      });
     if (path === "/channel" && request.method === "DELETE") {
+      this.trace({ ev: "channel.deleted", role, status: 204 });
       await s.deleteAll();
       await s.deleteAlarm();
       return new Response(null, { status: 204 });
@@ -129,7 +162,10 @@ export class Mailbox implements DurableObject {
       const rateKey = `traffic:${role}`;
       let rate = await s.get<{ until: number; count: number }>(rateKey);
       if (!rate || rate.until <= now) rate = { until: now + 60_000, count: 0 };
-      if (rate.count >= 30) return json({ error: "Rate limited" }, 429);
+      if (rate.count >= 30) {
+        this.trace({ ev: "send.rate-limited", role, status: 429 });
+        return json({ error: "Rate limited" }, 429);
+      }
       const b = parsedBody as Record<string, any>;
       if (
         !b ||
@@ -141,11 +177,43 @@ export class Mailbox implements DurableObject {
           Math.min(cfg.expiresAt, now + (cfg.active ? 120_000 : PAIR_TTL)) ||
         typeof b.payload !== "string" ||
         new TextEncoder().encode(b.payload).length > MAX_PAYLOAD
-      )
+      ) {
+        const reason = !b
+          ? "no-body"
+          : !ID.test(b.id)
+            ? "bad-id"
+            : !Number.isSafeInteger(b.expiresAt)
+              ? "bad-expiry"
+              : b.expiresAt <= now
+                ? "already-expired"
+                : b.expiresAt >
+                    Math.min(
+                      cfg.expiresAt,
+                      now + (cfg.active ? 120_000 : PAIR_TTL),
+                    )
+                  ? "expiry-too-far"
+                  : "bad-payload";
+        this.trace({ ev: "send.invalid", role, status: 400, detail: reason });
         return json({ error: "Invalid message" }, 400);
-      if (await s.get(`seen:${b.id}`)) return json({ error: "Duplicate" }, 409);
-      if (messages.size >= MAX_MESSAGES)
+      }
+      if (await s.get(`seen:${b.id}`)) {
+        this.trace({
+          ev: "send.duplicate",
+          role,
+          status: 409,
+          msg: String(b.id).slice(0, 8),
+        });
+        return json({ error: "Duplicate" }, 409);
+      }
+      if (messages.size >= MAX_MESSAGES) {
+        this.trace({
+          ev: "send.mailbox-full",
+          role,
+          status: 429,
+          count: messages.size,
+        });
         return json({ error: "Mailbox full" }, 429);
+      }
       const m: StoredMessage = {
         id: b.id,
         expiresAt: b.expiresAt,
@@ -160,6 +228,14 @@ export class Mailbox implements DurableObject {
         config: cfg,
       });
       await s.setAlarm(Math.min(now + 120_000, cfg.expiresAt));
+      this.trace({
+        ev: "send.stored",
+        role,
+        status: 201,
+        seq: m.sequence,
+        msg: m.id.slice(0, 8),
+        count: messages.size + 1,
+      });
       return json({ ok: true }, 201);
     }
     if (path === "/messages" && request.method === "GET") {
@@ -178,6 +254,14 @@ export class Mailbox implements DurableObject {
         cfg.expiresAt = now + DEVICE_TTL;
         await s.put("config", cfg);
       }
+      if (visible.length)
+        this.trace({
+          ev: "poll.delivered",
+          role,
+          count: visible.length,
+          seq: cfg.sequence,
+          detail: `after=${after}`,
+        });
       return json({ messages: visible, cursor: cfg.sequence });
     }
     return json({ error: "Not found" }, 404);

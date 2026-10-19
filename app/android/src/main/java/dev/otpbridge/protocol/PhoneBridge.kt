@@ -8,6 +8,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URI
 import java.util.concurrent.CancellationException
+import dev.otpbridge.Telemetry
 
 /** All state mutations are serialized. UI receives detached snapshots, never live JSON. */
 class PhoneBridge(context: Context) {
@@ -146,10 +147,11 @@ class PhoneBridge(context: Context) {
                 if (!d.optBoolean("active") && d.getLong("expiresAt") <= now()) continue
                 try { flush(d) } catch (e: PersistenceFailure) { throw e } catch (e: CancellationException) { throw e } catch (e: Exception) { errors.add("${d.getString("browserName")}: delivery retry pending") }
                 if (!allowed()) break
-                val after = d.optLong("cursor"); val result = client(d).fetch(after)
+                val after = d.optLong("cursor"); val fetchStart = now(); val result = client(d).fetch(after)
                 strict(result, setOf("messages", "cursor"))
                 val cursor = result.getLong("cursor"); require(cursor >= after && cursor <= 9007199254740991L) { "Invalid cursor" }
                 val messages = result.getJSONArray("messages"); require(messages.length() <= 64)
+                Telemetry.track("relay.fetch", "browser" to d.getString("browserName"), "after" to after, "cursor" to cursor, "count" to messages.length(), "ms" to (now() - fetchStart))
                 var previous = after; val ids = mutableSetOf<String>()
                 for (i in 0 until messages.length()) {
                     val t = messages.getJSONObject(i); strict(t, setOf("sequence", "id", "expiresAt", "payload"))
@@ -157,12 +159,12 @@ class PhoneBridge(context: Context) {
                     require(t.getString("payload").toByteArray().size <= 16384) { "Oversized envelope" }
                 }
                 for (i in 0 until messages.length()) {
-                    try { receive(d, messages.getJSONObject(i)) } catch (e: PersistenceFailure) { throw e } catch (e: CancellationException) { throw e } catch (_: Exception) { errors.add("${d.getString("browserName")}: rejected invalid or expired message") }
+                    try { receive(d, messages.getJSONObject(i)) } catch (e: PersistenceFailure) { throw e } catch (e: CancellationException) { throw e } catch (ex: Exception) { Telemetry.track("message.rejected", "msg" to Telemetry.short(messages.getJSONObject(i).optString("id")), "error" to (ex.message ?: ex.javaClass.simpleName)); errors.add("${d.getString("browserName")}: rejected invalid or expired message") }
                 }
                 if (internalDevices().any { it === d }) durable { d.put("cursor", cursor) }
             } catch (e: PersistenceFailure) { errors.add("Secure state could not be saved; refresh stopped. Retry after resolving device storage."); break }
             catch (e: CancellationException) { throw e }
-            catch (e: Exception) { errors.add("${d.getString("browserName")}: ${e.message}") }
+            catch (e: Exception) { Telemetry.track("refresh.error", "browser" to d.getString("browserName"), "error" to (e.message ?: e.javaClass.simpleName)); errors.add("${d.getString("browserName")}: ${e.message}") }
         }
         return errors
     }
@@ -172,13 +174,14 @@ class PhoneBridge(context: Context) {
         require(e.getString("kind") == "session" && e.getInt("v") == 1 && e.getString("channelId") == channel && id == t.getString("id") && e.getLong("expiresAt") == t.getLong("expiresAt")) { "Envelope mismatch" }
         val expiry = e.getLong("expiresAt"); require(expiry > time && expiry <= time + 300000) { "Expired message" }
         val seen = d.getJSONObject("seen"); seen.keys().asSequence().toList().forEach { if (seen.getLong(it) < time) seen.remove(it) }
-        if (seen.has(id)) return
+        if (seen.has(id)) { Telemetry.track("message.replay-skipped", "msg" to Telemetry.short(id)); return }
         val keys = session(d)
         val plain = try { crypto.decrypt(keys.receive, SodiumCrypto.decode(e.getString("nonce")), SodiumCrypto.decode(e.getString("ciphertext")), "otpbridge:session:1:$channel:$id:$expiry".toByteArray()) } finally { keys.receive.fill(0); keys.transmit.fill(0) }
         val body = try { JSONObject(String(plain, Charsets.UTF_8)) } finally { plain.fill(0) }
         val type = body.getString("type"); val created = body.getLong("createdAt"); val deadline = body.getLong("expiresAt")
         require(created >= 0 && created <= time + 30000 && deadline > time && deadline == expiry && deadline > created && deadline - created <= if (type.startsWith("pair.")) 300000 else 90000) { "Invalid deadline" }
         val requestId = body.getString("requestId"); requireId(requestId)
+        Telemetry.track("message.decrypted", "type" to type, "req" to Telemetry.short(requestId), "ageMs" to (time - created), "ttlMs" to (deadline - time))
         val common = setOf("type", "requestId", "createdAt", "expiresAt")
         when (type) {
             "pair.ready" -> {
@@ -194,15 +197,17 @@ class PhoneBridge(context: Context) {
                 val terminals = d.optJSONObject("terminal") ?: JSONObject().also { d.put("terminal", it) }
                 terminals.keys().asSequence().toList().forEach { if (terminals.getLong(it) < time) terminals.remove(it) }
                 val pending = Pending(channel, body)
-                if (terminals.has(requestId) || requests.containsKey(pending.key)) { durable { seen.put(id, expiry + 300000) }; return }
+                if (terminals.has(requestId) || requests.containsKey(pending.key)) { Telemetry.track("request.duplicate", "req" to Telemetry.short(requestId), "terminal" to terminals.has(requestId)); durable { seen.put(id, expiry + 300000) }; return }
                 if (ref.isNotEmpty() && d.getJSONObject("origins").optString(site) != ref) {
                     val response = denial(body, "account-mismatch")
                     val outbound = envelope(d, response)
                     durable { seen.put(id, expiry + 300000); terminal(d, requestId); append(d, outbound) }
+                    Telemetry.track("request.auto-denied", "req" to Telemetry.short(requestId), "reason" to "account-mismatch")
                     return
                 }
                 require(requests.values.count { it.channel == channel } < 16) { "Too many pending requests" }
                 durable { seen.put(id, expiry + 300000); requests[pending.key] = pending; val saved = d.optJSONObject("pending") ?: JSONObject().also { d.put("pending", it) }; saved.put(requestId, body) }
+                Telemetry.track("request.pending", "req" to Telemetry.short(requestId), "origin" to site, "hasContext" to body.has("context"))
             }
             "request.cancelled" -> { strict(body, common); require(d.getBoolean("active")); durable { seen.put(id, expiry + 300000); terminal(d, requestId) } }
             "device.revoked" -> { strict(body, common); durable { devices = JSONArray(internalDevices().filter { it.getString("channelId") != channel }); requests.entries.removeAll { it.value.channel == channel } } }

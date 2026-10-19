@@ -15,8 +15,8 @@ android {
         applicationId = "dev.otpbridge"
         minSdk = 29
         targetSdk = 35
-        versionCode = 14
-        versionName = "1.1.0"
+        versionCode = 16
+        versionName = "1.1.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     // Release signing comes from a git-ignored properties file (or env var path).

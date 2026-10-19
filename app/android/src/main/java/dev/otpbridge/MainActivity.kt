@@ -31,6 +31,7 @@ import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.withStateAtLeast
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import dev.otpbridge.protocol.PhoneBridge
@@ -136,6 +137,7 @@ class MainActivity : FragmentActivity() {
         getSharedPreferences("push", MODE_PRIVATE).edit().putBoolean("askedOnce", true).apply()
         Telemetry.track("push.permission", "granted" to granted)
         checkNotifications()
+        maybeOpenSingleRequest()
     }
     /** Re-evaluated on every app open: granted, can ask again, or blocked (needs Settings). */
     private fun checkNotifications() {
@@ -148,6 +150,10 @@ class MainActivity : FragmentActivity() {
         }
     }
     private fun requestNotifications() {
+        if (!startupFlow.canContinue(sessionEnabled, session.unlocked, accounts.isNotEmpty())) {
+            unlockSession(onDone = { if (session.unlocked) requestNotifications() })
+            return
+        }
         if (notifState == "ask" && android.os.Build.VERSION.SDK_INT >= 33) notifPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
         else startActivity(android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, packageName))
     }
@@ -176,7 +182,9 @@ class MainActivity : FragmentActivity() {
         maskAllCodes = getSharedPreferences("preferences", MODE_PRIVATE).getBoolean("maskAllCodes", false)
         lifecycleScope.launch { repeatOnLifecycle(Lifecycle.State.STARTED) {
             // No prompt on an empty vault; first unlock happens when a code is needed.
-            if (sessionEnabled && !session.unlocked && accounts.isNotEmpty()) unlockSession()
+            // One prompt at a time: a system dialog stealing focus cancels BiometricPrompt.
+            if (sessionEnabled && !session.unlocked && accounts.isNotEmpty()) unlockSession(onDone = ::afterStartupUnlock)
+            else afterStartupUnlock()
             while (isActive) { now = System.currentTimeMillis(); tickCodes(); delay(250) }
         } }
         runCatching { bridge = PhoneBridge(this); browsers = bridge!!.list() }.onFailure { status = "Device storage unavailable: ${it.message}" }
@@ -192,7 +200,7 @@ class MainActivity : FragmentActivity() {
     private suspend fun refresh(showStatus: Boolean) {
         val b = bridge ?: return
         val job = currentCoroutineContext()[Job]
-        try { val result = network { val errors = b.refresh { job?.isActive == true && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) }; Triple(b.list(), b.pendingRequests(), errors) }; browsers = result.first; if (result.second.size != pending.size) Telemetry.track("ui.pending", "count" to result.second.size); pending = result.second; selectedRequest?.let { reviewed -> if (pending.none { it.key == reviewed.key && it.body.toString() == reviewed.body.toString() }) { selectedRequest = null; selectedAccount = null; approveBinding = false } }; if (result.third.isNotEmpty()) status = result.third.joinToString("\n"); else if (showStatus) status = "Fetched ${pending.size} pending request(s)." } catch (e: CancellationException) { throw e } catch (e: Exception) { Telemetry.track("ui.refresh-failed", "error" to (e.message ?: e.javaClass.simpleName)); status = "Refresh failed: ${e.message}" }
+        try { val result = network { val errors = b.refresh { job?.isActive == true && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) }; Triple(b.list(), b.pendingRequests(), errors) }; browsers = result.first; if (result.second.size != pending.size) Telemetry.track("ui.pending", "count" to result.second.size); pending = result.second; selectedRequest?.let { reviewed -> if (pending.none { it.key == reviewed.key && it.body.toString() == reviewed.body.toString() }) { selectedRequest = null; selectedAccount = null; approveBinding = false } }; if (result.third.isNotEmpty()) status = result.third.joinToString("\n"); else if (showStatus) status = "Fetched ${pending.size} pending request(s)."; maybeOpenSingleRequest() } catch (e: CancellationException) { throw e } catch (e: Exception) { Telemetry.track("ui.refresh-failed", "error" to (e.message ?: e.javaClass.simpleName)); status = "Refresh failed: ${e.message}" }
     }
     private fun loadCatalog() {
         lastSessionStep = null
@@ -210,21 +218,49 @@ class MainActivity : FragmentActivity() {
     private fun authorize(reason: String, action: (ByteArray) -> Unit) {
         if (sessionEnabled && session.unlocked) { try { session.use(action) } catch (e: Exception) { error(e.message ?: "Session operation failed") } }
         else if (sessionEnabled) {
-            vault.unlock(this, "Unlock this visit", ::error) { key -> session.unlock(key); sessionUnlocked = true; lastSessionStep = null; action(key); tickCodes() }
+            vault.unlock(this, "Unlock this visit", ::error) { key -> session.unlock(key); sessionUnlocked = true; lastSessionStep = null; action(key); tickCodes(); afterStartupUnlock() }
         } else vault.unlock(this, reason, ::error, action)
     }
-    private fun unlockSession() {
-        vault.unlock(this, "Unlock codes until you leave the app", ::error) { key ->
+    private fun unlockSession() = unlockSession(onDone = ::afterStartupUnlock)
+    private fun unlockSession(onDone: () -> Unit) {
+        vault.unlock(this, "Unlock codes until you leave the app", { message -> error(message); onDone() }) { key ->
             session.unlock(key); sessionUnlocked = true
             if (needsMigration) { vault.migrateCatalog(key); loadCatalog() }
             lastSessionStep = null; tickCodes()
+            onDone()
+        }
+    }
+    private val startupFlow = dev.otpbridge.push.StartupFlow()
+    private var startupJob: Job? = null
+    /** Successful unlock is required in session mode. Cancellation leaves the permission prompt deferred. */
+    private fun afterStartupUnlock() {
+        if (!startupFlow.canContinue(sessionEnabled, session.unlocked, accounts.isNotEmpty())) return
+        val visit = startupFlow.visit
+        startupJob?.cancel()
+        startupJob = lifecycleScope.launch {
+            lifecycle.withStateAtLeast(Lifecycle.State.RESUMED) {}
+            // Let BiometricPrompt finish its dismissal before launching another system window.
+            delay(250)
+            if (visit != startupFlow.visit || !lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return@launch
+            if (startupFlow.takePermission(sessionEnabled, session.unlocked, accounts.isNotEmpty(), notifState == "ask" && !getSharedPreferences("push", MODE_PRIVATE).getBoolean("askedOnce", false))) requestNotifications()
+            maybeOpenSingleRequest()
+        }
+    }
+    private fun maybeOpenSingleRequest() {
+        if (!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return
+        val live = pending.filter { it.body.optLong("expiresAt") > System.currentTimeMillis() }
+        val idle = selectedRequest == null && !importOpen && pairQr == null && !enrollment && editAccount == null && !diagnosticsOpen
+        if (startupFlow.takeSingleRequest(sessionEnabled, session.unlocked, accounts.isNotEmpty(), live.size, idle)) {
+            tab = 0
+            review(live.single())
+            Telemetry.track("ui.auto-review")
         }
     }
     private fun setSessionMode(enabled: Boolean) {
         sessionEnabled = enabled
         getSharedPreferences("preferences", MODE_PRIVATE).edit().putBoolean("foregroundSession", enabled).apply()
         session.lock(); sessionUnlocked = false; visibleCodes = emptyMap(); lastSessionStep = null
-        if (enabled) unlockSession()
+        if (enabled) unlockSession() else afterStartupUnlock()
     }
     private fun tickCodes() {
         if (sessionEnabled && session.unlocked) {
@@ -719,12 +755,23 @@ class MainActivity : FragmentActivity() {
         }) { Text("Save with biometrics") } }, dismissButton = { TextButton(onClick = { enrollment = false; uriInput = "" }) { Text("Cancel") } })
     }
     override fun onStart() {
+        // Set the visit before super dispatches STARTED-bound startup coroutines.
+        startupFlow.beginVisit(); notifPromptDismissed = false
         dev.otpbridge.relay.RelayClient.resumeForeground(); Telemetry.track("app.foreground"); super.onStart()
         checkNotifications(); dev.otpbridge.push.Notifications.clear(this)
-        if (notifState == "ask" && !getSharedPreferences("push", MODE_PRIVATE).getBoolean("askedOnce", false)) requestNotifications()
+    }
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getBooleanExtra(dev.otpbridge.push.Notifications.EXTRA_FROM_PUSH, false)) {
+            startupFlow.beginVisit()
+            afterStartupUnlock()
+            operation { refresh(false) }
+        }
     }
     override fun onStop() {
         Telemetry.track("app.background")
+        startupFlow.invalidate(); startupJob?.cancel(); startupJob = null
         foregroundJobs.toList().forEach { it.cancel() }
         dev.otpbridge.relay.RelayClient.cancelAll()
         vault.cancel()

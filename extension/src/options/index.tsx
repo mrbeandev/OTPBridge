@@ -156,13 +156,10 @@ function App() {
             )}
             {s.pairing.sas && (
               <div className="verify">
-                <h3>Compare both screens</h3>
-                <div className="sas">
-                  {s.pairing.sas.slice(0, 4)} {s.pairing.sas.slice(4)}
-                </div>
+                <h3>Approve on your phone</h3>
                 <p>
-                  Compare these digits on your phone, then confirm there. This
-                  browser connects automatically.
+                  Check the browser name and relay in the phone approval sheet.
+                  This browser connects automatically when you approve.
                 </p>
               </div>
             )}

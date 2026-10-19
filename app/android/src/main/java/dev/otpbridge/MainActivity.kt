@@ -43,6 +43,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 
+@OptIn(ExperimentalMaterial3Api::class)
 class MainActivity : FragmentActivity() {
     private lateinit var vault: Vault
     private var bridge: PhoneBridge? = null
@@ -78,7 +79,7 @@ class MainActivity : FragmentActivity() {
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        if (!BuildConfig.DEBUG) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         vault = Vault(this)
         loadCatalog()
         sessionEnabled = getSharedPreferences("preferences", MODE_PRIVATE).getBoolean("foregroundSession", false)
@@ -261,9 +262,8 @@ class MainActivity : FragmentActivity() {
                             Text(d.getString("relay").removePrefix("https://"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             if (!d.optBoolean("active")) {
                                 val expired = d.getLong("expiresAt") <= System.currentTimeMillis()
-                                val sas = d.getString("sas"); Text("${sas.take(4)} ${sas.takeLast(4)}", style = MaterialTheme.typography.headlineLarge)
-                                Text(if (expired) "Pairing expired. Remove this entry and scan a new QR." else if (d.optBoolean("confirmed")) "Finishing connection automatically…" else "Do these digits match your browser?")
-                                if (!expired && !d.optBoolean("confirmed")) Button(enabled = !busy, onClick = { operation { network { bridge!!.confirm(d.getString("channelId")) }; refresh(false) } }) { Text("Digits match · connect") }
+                                Text(if (expired) "Pairing expired. Remove this entry and scan a new QR." else if (d.optBoolean("confirmed")) "Finishing connection automatically…" else "Approval is pending. Remove and scan again if setup was interrupted.")
+                                if (!expired && !d.optBoolean("confirmed")) Button(enabled = !busy, onClick = { operation { network { bridge!!.confirm(d.getString("channelId")) }; refresh(false) } }) { Text("Finish approved pairing") }
                             } else Text("Connected", style = MaterialTheme.typography.labelLarge)
                             TextButton(onClick = { operation { network { bridge!!.revoke(d.getString("channelId")) }; refresh(false) } }) { Text("Remove browser") }
                         } } }
@@ -274,13 +274,30 @@ class MainActivity : FragmentActivity() {
         if (addMenu) AlertDialog(onDismissRequest = { addMenu = false }, title = { Text("Add an account") }, text = { Text("Scan the QR shown by the service, or enter its setup key.") }, confirmButton = { TextButton(onClick = { addMenu = false; launchScan("account") }) { Text("Scan QR code") } }, dismissButton = { TextButton(onClick = { addMenu = false; uriInput = ""; enrollment = true }) { Text("Enter setup key") } })
         if (enrollment) EnrollmentDialog()
         deleteAccount?.let { a -> AlertDialog(onDismissRequest = { deleteAccount = null }, title = { Text("Delete this account?") }, text = { Text("${a.issuer.ifBlank { a.label }} will be removed from this phone. This does not disable two-factor authentication on the service. Make sure you have another way to sign in.") }, confirmButton = { TextButton(onClick = { deleteAccount = null; vault.unlock(this, "Delete ${a.issuer.ifBlank { a.label }}", ::error) { key -> vault.delete(key, a.id); loadCatalog(); status = "Account deleted from this phone." } }) { Text("Delete with fingerprint") } }, dismissButton = { TextButton(onClick = { deleteAccount = null }) { Text("Keep account") } }) }
-        pairQr?.let { qr -> AlertDialog(onDismissRequest = { pairQr = null }, title = { Text("Connect this browser?") }, text = { Text("Continue only if you opened this QR in your own extension. Next, compare the digits and confirm here on your phone.") }, confirmButton = { TextButton(onClick = { pairQr = null; operation { network { bridge!!.pair(qr) }; tab = 2; refresh(false) } }) { Text("Continue") } }, dismissButton = { TextButton(onClick = { pairQr = null }) { Text("Cancel") } }) }
-        selectedRequest?.let { request -> AlertDialog(onDismissRequest = { selectedRequest = null }, title = { Text("Share one code") }, text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        pairQr?.let { qr ->
+            val details = remember(qr) { runCatching { JSONObject(qr) }.getOrNull() }
+            ModalBottomSheet(onDismissRequest = { pairQr = null }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = MaterialTheme.colorScheme.surface) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 28.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("PAIR BROWSER", style = MaterialTheme.typography.labelMedium)
+                    Text(details?.optString("browserName")?.take(80)?.ifBlank { "Unknown browser" } ?: "Invalid pairing QR", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+                    Text(details?.optString("deviceInfo")?.take(240) ?: "", style = MaterialTheme.typography.bodyMedium)
+                    Text(details?.optString("browserInfo")?.take(240) ?: "", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Relay", style = MaterialTheme.typography.labelLarge)
+                    Text(details?.optString("relay")?.take(2048) ?: "", style = MaterialTheme.typography.bodySmall)
+                    Text("Approve only if you opened this QR in your own browser. This gives the browser permission to request codes—not access to your secret keys.", style = MaterialTheme.typography.bodyMedium)
+                    Button(enabled = details != null && !busy, modifier = Modifier.fillMaxWidth(), onClick = { pairQr = null; operation { network { bridge!!.pair(qr) }; tab = 2; refresh(false) } }) { Text("Approve browser") }
+                    TextButton(modifier = Modifier.fillMaxWidth(), onClick = { pairQr = null }) { Text("Not my browser") }
+                }
+            }
+        }
+        selectedRequest?.let { request -> ModalBottomSheet(onDismissRequest = { selectedRequest = null }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = MaterialTheme.colorScheme.surface) { Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 24.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("SHARE ONE CODE", style = MaterialTheme.typography.labelMedium)
             Text(request.body.getString("origin").removePrefix("https://"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
             Text("Requested by ${request.body.getString("browserName")}. Check the website before approving.", style = MaterialTheme.typography.bodySmall)
             request.body.optJSONObject("context")?.let { context ->
                 Text("Request details", style = MaterialTheme.typography.labelLarge)
                 dev.otpbridge.protocol.RequestContext.lines(context).forEach { line -> Text(line, style = MaterialTheme.typography.bodySmall) }
+                context.optJSONObject("location")?.let { dev.otpbridge.ui.LocationPreview(it) }
                 Text("Browser-provided context, not proof of identity. Manage collection in extension settings.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             val ref = request.body.optString("accountRef", "")
@@ -289,7 +306,9 @@ class MainActivity : FragmentActivity() {
             if (accounts.isEmpty() && !needsMigration) Text("Add an authenticator account first.")
             selectedAccount?.let { id -> accounts.firstOrNull { it.id == id }?.let { a -> Text("${CodeTiming.secondsRemaining(now, CodeTiming.validUntil(now, a.period))}s until next code", style = MaterialTheme.typography.labelLarge) } }
             Text("Request expires in ${CodeTiming.secondsRemaining(now, request.body.getLong("expiresAt"))}s. Only this code is shared; your secret stays here.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        } }, confirmButton = { TextButton(enabled = selectedAccount != null && !busy, onClick = ::approve) { Text(if (sessionEnabled && sessionUnlocked) "Send code" else "Approve with fingerprint") } }, dismissButton = { TextButton(onClick = { selectedRequest = null }) { Text("Cancel") } }) }
+                    Button(enabled = selectedAccount != null && !busy && request.body.getLong("expiresAt") > now, modifier = Modifier.fillMaxWidth(), onClick = ::approve) { Text(if (sessionEnabled && sessionUnlocked) "Send code" else "Approve with fingerprint") }
+            TextButton(modifier = Modifier.fillMaxWidth(), onClick = { selectedRequest = null }) { Text("Cancel") }
+        } } }
     }
     private fun launchScan(mode: String) {
         scanMode = mode

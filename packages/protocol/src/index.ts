@@ -114,6 +114,8 @@ export const pairQrSchema = z
     bootstrap: idSchema,
     browserPublicKey: idSchema,
     browserName: name,
+    browserInfo: z.string().max(240).optional(),
+    deviceInfo: z.string().max(240).optional(),
     expiresAt: timestamp,
   })
   .strict();

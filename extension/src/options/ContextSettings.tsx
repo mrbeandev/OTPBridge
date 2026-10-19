@@ -22,17 +22,6 @@ export function ContextSettings() {
     setP(next);
     await chrome.storage.local.set({ contextPreferences: next });
   }
-  async function grant() {
-    const origins = p.publicIp ? ["https://api.ipify.org/*"] : [];
-    const ok = origins.length
-      ? await chrome.permissions.request({ origins })
-      : true;
-    setMessage(
-      ok
-        ? "Enabled permissions granted. Unavailable details are omitted."
-        : "Some access was denied. OTP requests still work without those details.",
-    );
-  }
   return (
     <section>
       <h2>Request details</h2>
@@ -88,9 +77,7 @@ export function ContextSettings() {
           />
         </label>
       )}
-      <button className="secondary" onClick={() => void grant()}>
-        Allow public IP lookup
-      </button>
+
       <p className="muted">
         No background tracking. Details are end-to-end encrypted, but
         browser-provided context can be falsified by a compromised device.

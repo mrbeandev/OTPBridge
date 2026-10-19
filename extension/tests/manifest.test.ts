@@ -7,4 +7,5 @@ it("declares geolocation as required because Chrome rejects it as optional", () 
       [],
   ).not.toContain("geolocation");
   expect(manifest.permissions).toContain("offscreen");
+  expect(manifest.host_permissions).toEqual(["https://api.ipify.org/*"]);
 });

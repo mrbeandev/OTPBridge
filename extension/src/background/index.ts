@@ -26,7 +26,7 @@ import {
 import { captureTarget, fillTarget } from "../content/target";
 import { expiryBadge, remainingSeconds } from "./countdown";
 import { probeRelay, type RelayHealth } from "./relay-status";
-import { collectContext, preferences } from "./request-context";
+import { bestEffortContext } from "./request-context";
 let chain: Promise<unknown> = Promise.resolve();
 function exclusive<T>(fn: () => Promise<T>): Promise<T> {
   const task = chain.then(fn, fn);
@@ -79,6 +79,8 @@ async function startPair(relayValue: string, browserName: string) {
       bootstrap: randomId(),
       browserPublicKey: own.publicKey,
       browserName: browserName.trim(),
+      browserInfo: navigator.userAgent.slice(0, 240),
+      deviceInfo: navigator.platform.slice(0, 240),
       expiresAt: Math.min(c.expiresAt, Date.now() + PAIR_TTL),
     },
     own,
@@ -114,7 +116,7 @@ async function pollPair(s: State) {
         const response = decryptPair(p.qr, t.payload);
         p.response = response;
         p.keys = sessionKeys("browser", p.own, response.phonePublicKey);
-        s.status = "Compare the eight digits on both screens.";
+        s.status = "Review browser details and approve on your phone.";
       } else if (kind === "session" && p.keys) {
         const m = decryptMessage(p.qr.channelId, p.keys.rx, t);
         if (m.type === "pair.confirm" && m.requestId === p.qr.channelId)
@@ -206,7 +208,8 @@ async function requestFill(
   if (s.pending)
     throw new Error("Cancel the current request before starting another");
   const target = await capture(tabId, frameId, useContext);
-  const context = await collectContext(await preferences());
+  // Context is best-effort: permission/provider failure cannot gate OTP delivery.
+  const context = await bestEffortContext();
   const now = Date.now(),
     d = s.device;
   const request: FillRequest = {
@@ -404,6 +407,31 @@ async function refreshRelayHealth() {
           permission: false,
           checkedAt: Date.now(),
         };
+    if (state.device && permission) {
+      try {
+        await client(state.device).poll(state.device.cursor);
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          /Relay error (401|404|410)\b/.test(error.message)
+        ) {
+          await exclusive(async () => {
+            const current = await load();
+            if (current.device?.channelId === state.device?.channelId) {
+              delete current.device;
+              delete current.pending;
+              delete current.lastFill;
+              delete current.error;
+              current.status =
+                "Phone pairing was removed or expired. Pair your phone again.";
+              await save(current);
+              await updateBadge();
+            }
+          });
+          next.reachable = false;
+        }
+      }
+    }
     relayHealth = next;
     const paths = Object.fromEntries(
       [16, 32, 48, 128].map((size) => [
@@ -433,7 +461,7 @@ async function status() {
   const s = await load();
   if (
     relayHealth.relay !== (s.device?.relay ?? s.pairing?.qr.relay ?? null) ||
-    Date.now() - relayHealth.checkedAt > 45000
+    Date.now() - relayHealth.checkedAt > 5000
   )
     void refreshRelayHealth();
   const relay = s.device?.relay ?? s.pairing?.qr.relay;

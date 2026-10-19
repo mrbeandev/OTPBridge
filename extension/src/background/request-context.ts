@@ -21,6 +21,21 @@ export async function preferences(): Promise<ContextPreferences> {
     ...(contextPreferences as Partial<ContextPreferences> | undefined),
   };
 }
+export async function bestEffortContext(): Promise<RequestContext> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      preferences()
+        .then(collectContext)
+        .catch(() => ({})),
+      new Promise<RequestContext>((resolve) => {
+        timer = setTimeout(() => resolve({}), 7000);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
 export async function collectContext(
   p: ContextPreferences,
 ): Promise<RequestContext> {

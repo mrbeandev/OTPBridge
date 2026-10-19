@@ -89,7 +89,7 @@ class PhoneBridge(context: Context) {
         operationToken = RelayClient.foregroundToken()
         require(qrText.length <= 4096) { "Pairing QR too large" }
         val qr = JSONObject(qrText)
-        strict(qr, setOf("type", "v", "relay", "channelId", "phoneToken", "bootstrap", "browserPublicKey", "browserName", "expiresAt"))
+        strict(qr, setOf("type", "v", "relay", "channelId", "phoneToken", "bootstrap", "browserPublicKey", "browserName", "expiresAt"), setOf("browserInfo", "deviceInfo"))
         require(qr.getString("type") == "otpbridge.pair" && qr.getInt("v") == 1)
         val deadline = qr.getLong("expiresAt"); require(deadline > now() && deadline - now() <= 300000) { "Pairing QR expired" }
         listOf("channelId", "phoneToken", "bootstrap", "browserPublicKey").forEach { requireId(qr.getString(it)) }
@@ -107,6 +107,11 @@ class PhoneBridge(context: Context) {
         client(d) // Validate HTTPS relay before persisting trust material.
         durable { devices.put(d); append(d, JSONObject().put("id", randomId()).put("expiresAt", deadline).put("payload", payload.toString())) }
         // Network failure leaves a durable exact pairing response for foreground retry.
+        // User already approved the detailed scanned QR. Persist confirmation
+        // behind the bootstrap response in the same ordered durable outbox.
+        val time = now()
+        val confirmation = envelope(d, JSONObject().put("type", "pair.confirm").put("requestId", d.getString("channelId")).put("createdAt", time).put("expiresAt", minOf(deadline, time + 90000)))
+        durable { d.put("confirmed", true); append(d, confirmation) }
         runCatching { flush(d) }
         return JSONObject(d.toString())
     }

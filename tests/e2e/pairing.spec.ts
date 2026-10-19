@@ -31,6 +31,7 @@ test("real browser pairs automatically after authenticated phone SAS confirmatio
   let active = false,
     activationResponsesLost = 0,
     readyResponsesLost = 0;
+  let revoked = false;
   const readyAttempts: string[] = [];
   const server = createServer(async (req, res) => {
     res.setHeader("Content-Type", "application/json");
@@ -56,6 +57,11 @@ test("real browser pairs automatically after authenticated phone SAS confirmatio
     }
     if (url.pathname === "/health") {
       res.end(JSON.stringify({ ok: true, protocolVersions: [1] }));
+      return;
+    }
+    if (revoked) {
+      res.statusCode = 404;
+      res.end("{}");
       return;
     }
     if (!role) {
@@ -170,9 +176,7 @@ test("real browser pairs automatically after authenticated phone SAS confirmatio
       role: "phone",
     });
     await expect(
-      page.getByText(
-        `${pairingSas(response).slice(0, 4)} ${pairingSas(response).slice(4)}`,
-      ),
+      page.getByRole("heading", { name: "Approve on your phone" }),
     ).toBeVisible({ timeout: 10000 });
     await expect(
       page.getByRole("button", { name: "Digits match" }),
@@ -302,6 +306,13 @@ test("real browser pairs automatically after authenticated phone SAS confirmatio
     const popup = await context.newPage();
     await popup.goto(`chrome-extension://${id}/popup.html`);
     await expect(popup.getByText(/\d+s remaining/)).toBeVisible();
+    revoked = true;
+    await expect(
+      page.getByRole("heading", { name: "Connect your phone" }),
+    ).toBeVisible({ timeout: 20000 });
+    await expect(
+      page.getByRole("heading", { name: "Connected phone" }),
+    ).toHaveCount(0);
   } finally {
     await context.close();
     await new Promise<void>((r, j) => server.close((e) => (e ? j(e) : r())));

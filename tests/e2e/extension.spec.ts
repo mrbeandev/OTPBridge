@@ -45,7 +45,9 @@ test("MV3 worker initializes bundled crypto and setup UI without remote code", a
     });
     expect(state.manifest.permissions).not.toContain("notifications");
     expect(state.manifest.permissions).not.toContain("tabs");
-    expect(state.manifest.host_permissions).toBeUndefined();
+    expect(state.manifest.host_permissions).toEqual([
+      "https://api.ipify.org/*",
+    ]);
     expect(errors).toEqual([]);
   } finally {
     await context.close();

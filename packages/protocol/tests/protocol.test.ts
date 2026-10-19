@@ -8,6 +8,8 @@ import {
   decryptMessage,
   encryptPair,
   decryptPair,
+  encryptPairDenial,
+  decryptPairOutcome,
   pairingSas,
   validateMessage,
   assertApproval,
@@ -45,6 +47,30 @@ function req(): FillRequest {
   };
 }
 describe("authenticated encrypted protocol", () => {
+  it("authenticates pairing rejection against scanned QR and rejects substituted/expired denial", () => {
+    const s = setup();
+    const qr: PairQr = {
+      type: "otpbridge.pair",
+      v: 1,
+      relay: "https://relay.example",
+      channelId: s.channel,
+      phoneToken: randomId(),
+      bootstrap: randomId(),
+      browserPublicKey: s.b.publicKey,
+      browserName: "Laptop",
+      expiresAt: Date.now() + 300000,
+    };
+    const payload = encryptPairDenial(qr);
+    expect(decryptPairOutcome(qr, payload).type).toBe("pair.denied");
+    expect(payload).not.toContain("denied");
+    expect(() =>
+      decryptPairOutcome({ ...qr, bootstrap: randomId() }, payload),
+    ).toThrow();
+    expect(() =>
+      decryptPairOutcome({ ...qr, browserName: "Other" }, payload),
+    ).toThrow();
+    expect(() => decryptPairOutcome(qr, payload, qr.expiresAt)).toThrow();
+  });
   it("encrypts bounded optional context and rejects invalid coordinates/unknown fields", () => {
     const s = setup();
     const message = {

@@ -86,6 +86,23 @@ class PhoneBridge(context: Context) {
             durable { d.put("outbox", JSONArray((1 until outbox.length()).map { outbox.getJSONObject(it) })) }
         }
     }
+    @Synchronized fun rejectPair(qrText: String) {
+        operationToken = RelayClient.foregroundToken()
+        require(qrText.length <= 4096)
+        val qr = JSONObject(qrText)
+        strict(qr, setOf("type", "v", "relay", "channelId", "phoneToken", "bootstrap", "browserPublicKey", "browserName", "expiresAt"), setOf("browserInfo", "deviceInfo"))
+        require(qr.getString("type") == "otpbridge.pair" && qr.getInt("v") == 1)
+        val deadline=qr.getLong("expiresAt");require(deadline>now()&&deadline-now()<=300000)
+        listOf("channelId","phoneToken","bootstrap","browserPublicKey").forEach{requireId(qr.getString(it))}
+        val body=JSONObject().put("type","pair.denied").put("v",1).put("channelId",qr.getString("channelId")).put("browserPublicKey",qr.getString("browserPublicKey")).put("browserName",qr.getString("browserName")).put("expiresAt",deadline).put("reason","denied")
+        val nonce=crypto.random(24);val bootstrap=SodiumCrypto.decode(qr.getString("bootstrap"))
+        val encrypted=try{crypto.encrypt(bootstrap,nonce,body.toString().toByteArray(),"otpbridge:pair:1:${qr.getString("channelId")}".toByteArray())}finally{bootstrap.fill(0)}
+        val payload=JSONObject().put("kind","pair").put("v",1).put("nonce",SodiumCrypto.encode(nonce)).put("ciphertext",SodiumCrypto.encode(encrypted))
+        val transport=JSONObject().put("id",randomId()).put("expiresAt",deadline).put("payload",payload.toString())
+        checkForeground()
+        RelayClient(qr.getString("relay"),qr.getString("channelId"),qr.getString("phoneToken")).post(transport)
+        Telemetry.track("pair.denied")
+    }
     @Synchronized fun pair(qrText: String): JSONObject {
         operationToken = RelayClient.foregroundToken()
         require(qrText.length <= 4096) { "Pairing QR too large" }

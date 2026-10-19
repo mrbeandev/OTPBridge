@@ -9,6 +9,8 @@ import androidx.compose.ui.unit.dp
 
 /** Small bundled vector set: no text glyphs, icon font or network resources. */
 object BridgeIcons {
+    val Eye = ImageVector.Builder("Eye",24.dp,24.dp,24f,24f).apply { path(fill=SolidColor(Color.Black),pathFillType=PathFillType.EvenOdd) { moveTo(1f,12f);curveTo(5f,3f,19f,3f,23f,12f);curveTo(19f,21f,5f,21f,1f,12f);close();moveTo(3.5f,12f);curveTo(7f,5.5f,17f,5.5f,20.5f,12f);curveTo(17f,18.5f,7f,18.5f,3.5f,12f);close() };path(fill=SolidColor(Color.Black)){moveTo(15f,12f);curveTo(15f,16f,9f,16f,9f,12f);curveTo(9f,8f,15f,8f,15f,12f);close()} }.build()
+    val EyeOff = ImageVector.Builder("EyeOff",24.dp,24.dp,24f,24f).apply { path(fill=SolidColor(Color.Black)) { moveTo(3f,2f);lineTo(22f,21f);lineTo(20.5f,22.5f);lineTo(1.5f,3.5f);close();moveTo(7f,5f);curveTo(14f,2f,21f,6f,23f,12f);lineTo(21f,15f);lineTo(19.5f,13.5f);lineTo(20.5f,12f);curveTo(18f,7f,13f,5f,9f,7f);close();moveTo(2f,9f);lineTo(4f,10.5f);lineTo(3.5f,12f);curveTo(6f,17f,11f,19f,15f,17f);lineTo(17f,19f);curveTo(10f,22f,3f,18f,1f,12f);close() } }.build()
     val Back = ImageVector.Builder("Back",24.dp,24.dp,24f,24f).apply { path(fill=SolidColor(Color.Black)) { moveTo(20f,11f);lineTo(7.83f,11f);lineTo(13.42f,5.41f);lineTo(12f,4f);lineTo(4f,12f);lineTo(12f,20f);lineTo(13.42f,18.59f);lineTo(7.83f,13f);lineTo(20f,13f);close() } }.build()
     val Accounts = ImageVector.Builder("Accounts",24.dp,24.dp,24f,24f).apply {
         path(fill=SolidColor(Color.Black)) { moveTo(3f,3f); lineTo(10f,3f); lineTo(10f,10f); lineTo(3f,10f); close(); moveTo(14f,3f);lineTo(21f,3f);lineTo(21f,10f);lineTo(14f,10f);close();moveTo(3f,14f);lineTo(10f,14f);lineTo(10f,21f);lineTo(3f,21f);close();moveTo(14f,14f);lineTo(21f,14f);lineTo(21f,21f);lineTo(14f,21f);close() }

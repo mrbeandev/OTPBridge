@@ -306,6 +306,81 @@ test("real browser pairs automatically after authenticated phone SAS confirmatio
     const popup = await context.newPage();
     await popup.goto(`chrome-extension://${id}/popup.html`);
     await expect(popup.getByText(/\d+s remaining/)).toBeVisible();
+    // Trigger a second request and have the authenticated phone deny it.
+    await destination.getByLabel("OTP").fill("");
+    await destination.getByLabel("OTP").focus();
+    await worker.evaluate(async () => {
+      const c = (globalThis as any).chrome;
+      const tabs = await c.tabs.query({ url: "https://otpbridge.test/*" });
+      (globalThis as any).__testCommandListener("fill-from-phone", tabs[0]);
+    });
+    await expect
+      .poll(
+        () =>
+          messages
+            .filter((m) => m.role === "browser")
+            .map((m) => {
+              try {
+                return decryptMessage(channelId, keys.rx, m);
+              } catch {
+                return null;
+              }
+            })
+            .filter((m) => m?.type === "fill.request").length,
+      )
+      .toBe(2);
+    const second = messages
+      .filter((m) => m.role === "browser")
+      .map((m) => {
+        try {
+          return decryptMessage(channelId, keys.rx, m);
+        } catch {
+          return null;
+        }
+      })
+      .filter((m) => m?.type === "fill.request")
+      .at(-1)!;
+    const deniedAt = Date.now();
+    messages.push({
+      ...encryptMessage(channelId, keys.tx, {
+        type: "fill.denied",
+        requestId: second.requestId,
+        createdAt: deniedAt,
+        expiresAt: Math.min(second.expiresAt, deniedAt + 90000),
+        reason: "denied",
+      }),
+      sequence: ++sequence,
+      role: "phone",
+    });
+    await expect
+      .poll(() =>
+        worker.evaluate(
+          async () =>
+            (await (globalThis as any).chrome.storage.local.get("state")).state
+              .denial?.kind,
+        ),
+      )
+      .toBe("otp");
+    expect(
+      await worker.evaluate(
+        async () =>
+          (await (globalThis as any).chrome.storage.local.get("state")).state
+            .denial.acknowledged,
+      ),
+    ).toBe(false);
+    await popup.reload();
+    await expect(
+      popup.getByRole("heading", { name: "OTP request denied" }),
+    ).toBeVisible();
+    await expect
+      .poll(() =>
+        worker.evaluate(
+          async () =>
+            (await (globalThis as any).chrome.storage.local.get("state")).state
+              .denial.acknowledged,
+        ),
+      )
+      .toBe(true);
     revoked = true;
     await expect(
       page.getByRole("heading", { name: "Connect your phone" }),

@@ -275,6 +275,72 @@ export function encryptPair(qr: PairQr, p: PairResponse): string {
     ciphertext: encode(c),
   });
 }
+export const pairDenialSchema = z
+  .object({
+    type: z.literal("pair.denied"),
+    v: z.literal(1),
+    channelId: idSchema,
+    browserPublicKey: idSchema,
+    browserName: name,
+    expiresAt: timestamp,
+    reason: z.literal("denied"),
+  })
+  .strict();
+export type PairDenial = z.infer<typeof pairDenialSchema>;
+export function encryptPairDenial(qr: PairQr): string {
+  const body: PairDenial = {
+    type: "pair.denied",
+    v: 1,
+    channelId: qr.channelId,
+    browserPublicKey: qr.browserPublicKey,
+    browserName: qr.browserName,
+    expiresAt: qr.expiresAt,
+    reason: "denied",
+  };
+  const nonce = sodium.randombytes_buf(24);
+  const c = sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(
+    JSON.stringify(body),
+    `otpbridge:pair:1:${qr.channelId}`,
+    null,
+    nonce,
+    decode(qr.bootstrap, 32),
+  );
+  return JSON.stringify({
+    kind: "pair",
+    v: 1,
+    nonce: encode(nonce),
+    ciphertext: encode(c),
+  });
+}
+export function decryptPairOutcome(
+  qr: PairQr,
+  payload: string,
+  now = Date.now(),
+): PairResponse | PairDenial {
+  if (payload.length > MAX_PAYLOAD) throw new Error("Oversized payload");
+  const box = boxSchema.parse(JSON.parse(payload));
+  const plain = sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
+    null,
+    decode(box.ciphertext),
+    `otpbridge:pair:1:${qr.channelId}`,
+    decode(box.nonce, 24),
+    decode(qr.bootstrap, 32),
+    "text",
+  );
+  const body = JSON.parse(plain);
+  if (body.type !== "pair.denied") return decryptPair(qr, payload, now);
+  const p = pairDenialSchema.parse(body);
+  if (
+    p.channelId !== qr.channelId ||
+    p.browserPublicKey !== qr.browserPublicKey ||
+    p.browserName !== qr.browserName ||
+    p.expiresAt !== qr.expiresAt ||
+    p.expiresAt <= now ||
+    p.expiresAt > now + PAIR_TTL
+  )
+    throw new Error("Pairing denial mismatch/expired");
+  return p;
+}
 export function decryptPair(
   qr: PairQr,
   payload: string,

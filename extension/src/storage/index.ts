@@ -45,6 +45,7 @@ export interface State {
   pairing?: Pairing;
   pending?: Pending;
   lastFill?: { origin: string; validUntil: number };
+  denial?: import("../background/denial").DenialState;
   status: string;
   error?: string;
 }

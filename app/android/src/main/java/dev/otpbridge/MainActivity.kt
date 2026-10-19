@@ -53,6 +53,7 @@ class MainActivity : FragmentActivity() {
     private var tab by mutableIntStateOf(0)
     private val session = ForegroundSession()
     private var sessionEnabled by mutableStateOf(false)
+    private var maskAllCodes by mutableStateOf(false)
     private var sessionUnlocked by mutableStateOf(false)
     private var now by mutableLongStateOf(System.currentTimeMillis())
     private data class VisibleCode(val code: String, val validUntil: Long)
@@ -86,6 +87,7 @@ class MainActivity : FragmentActivity() {
         vault = Vault(this)
         loadCatalog()
         sessionEnabled = getSharedPreferences("preferences", MODE_PRIVATE).getBoolean("foregroundSession", false)
+        maskAllCodes = getSharedPreferences("preferences", MODE_PRIVATE).getBoolean("maskAllCodes", false)
         lifecycleScope.launch { repeatOnLifecycle(Lifecycle.State.STARTED) {
             if (sessionEnabled && !session.unlocked) unlockSession()
             while (isActive) { now = System.currentTimeMillis(); tickCodes(); delay(250) }
@@ -212,7 +214,10 @@ class MainActivity : FragmentActivity() {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Column { Text(if (tab == 0) "OTPBridge" else "Browsers", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
                         Text(if (tab == 0) "Accounts & approvals" else "Only devices you trust.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    if (tab == 0) TextButton(enabled = !busy, onClick = { operation { refresh(true) } }) { Text("Refresh") }
+                    if (tab == 0) Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconToggleButton(checked = !maskAllCodes, onCheckedChange = { visible -> maskAllCodes = !visible; getSharedPreferences("preferences", MODE_PRIVATE).edit().putBoolean("maskAllCodes", maskAllCodes).apply() }) { Icon(if(maskAllCodes) BridgeIcons.EyeOff else BridgeIcons.Eye, contentDescription = if(maskAllCodes) "Show account codes" else "Hide all account codes") }
+                        TextButton(enabled = !busy, onClick = { operation { refresh(true) } }) { Text("Refresh") }
+                    }
                 }
                 Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
                     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
@@ -234,7 +239,7 @@ class MainActivity : FragmentActivity() {
                                     Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(request.body.getString("browserName"), style = MaterialTheme.typography.labelMedium); Text("${CodeTiming.secondsRemaining(now, request.body.getLong("expiresAt"))}s left", style = MaterialTheme.typography.labelMedium) }
                                         Text(request.body.getString("origin").removePrefix("https://"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { Button(enabled = !busy, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp), onClick = { review(request) }) { Text("Review & send") }; TextButton(enabled = !busy, onClick = { operation { network { bridge!!.deny(request) }; refresh(false) } }) { Text("Deny") } }
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { Button(enabled = !busy, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp), onClick = { review(request) }) { Text("Review & send") }; TextButton(enabled = !busy, onClick = { operation { network { bridge!!.deny(request) }; status = "OTP request denied. No code was shared."; refresh(false) } }) { Text("Deny") } }
                                     }
                                 } }
                             }
@@ -251,10 +256,11 @@ class MainActivity : FragmentActivity() {
                                         Column(Modifier.weight(1f).padding(horizontal = 10.dp)) { Text(a.issuer.ifBlank { a.label }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold); if (a.issuer.isNotBlank()) Text(a.label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                                         Box { IconButton(onClick = { accountMenu = a.id }) { Icon(BridgeIcons.More, contentDescription = "Account options for ${a.label}") }; DropdownMenu(expanded = accountMenu == a.id, onDismissRequest = { accountMenu = null }) { DropdownMenuItem(text = { Text("Delete account") }, onClick = { accountMenu = null; deleteAccount = a }) } }
                                     }
-                                    val shown = visibleCodes[a.id]?.takeIf { it.validUntil > now }
+                                    val shown = visibleCodes[a.id]?.takeIf { it.validUntil > now && !maskAllCodes }
                                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                         Text(shown?.code?.chunked(3)?.joinToString(" ") ?: "••• •••", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Medium)
-                                        if (shown == null) TextButton(onClick = { showCode(a) }) { Text("Reveal code") }
+                                        if (maskAllCodes) Text("Hidden", style = MaterialTheme.typography.labelMedium)
+                                        else if (shown == null) TextButton(onClick = { showCode(a) }) { Text("Reveal code") }
                                         else Text("${CodeTiming.secondsRemaining(now, shown.validUntil)}s", style = MaterialTheme.typography.titleMedium)
                                     }
                                     val until = CodeTiming.validUntil(now, a.period)
@@ -305,7 +311,7 @@ class MainActivity : FragmentActivity() {
                 Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     if (expired) Text("This QR expired. Create a new one in your extension.", style = MaterialTheme.typography.bodySmall)
                     Button(enabled = details != null && !busy && !expired, modifier = Modifier.fillMaxWidth(), onClick = { pairQr = null; operation { network { bridge!!.pair(qr) }; tab = 2; refresh(false) } }) { Text("Connect $browserName", maxLines = 1) }
-                    TextButton(modifier = Modifier.fillMaxWidth(), onClick = { pairQr = null }) { Text("Not my browser") }
+                    TextButton(enabled = !busy, modifier = Modifier.fillMaxWidth(), onClick = { pairQr = null; operation { try { network { bridge!!.rejectPair(qr) }; status = "Browser pairing denied. No connection was created." } catch (e: Exception) { if(e is CancellationException)throw e; status = "Pairing declined locally. Could not notify browser; its QR will expire." }; Telemetry.track("ui.pair-denied") } }) { Text("Deny browser") }
                 }
             } }
         ) { padding ->
@@ -361,7 +367,7 @@ class MainActivity : FragmentActivity() {
                         if (status.isNotBlank()) Text(status, style = MaterialTheme.typography.bodySmall)
                         Text(if (left > 0) "Only this code is shared. Your secret stays on this phone." else "This request expired. Ask for a new code in your browser.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(enabled = !busy && left > 0, onClick = { val r = request; selectedRequest = null; operation { network { bridge!!.deny(r) }; refresh(false) } }, modifier = Modifier.weight(1f)) { Text("Deny") }
+                            OutlinedButton(enabled = !busy && left > 0, onClick = { val r = request; selectedRequest = null; operation { network { bridge!!.deny(r) }; status = "OTP request denied. No code was shared."; refresh(false) } }, modifier = Modifier.weight(1f)) { Text("Deny") }
                             Button(enabled = selectedAccount != null && !busy && left > 0, modifier = Modifier.weight(2f), onClick = ::approve) { Text(if (sessionEnabled && sessionUnlocked) "Send code" else "Approve with fingerprint") }
                         }
                     }

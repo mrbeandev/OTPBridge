@@ -6,7 +6,7 @@ import {
   RelayClient,
   PAIR_TTL,
   REQUEST_TTL,
-  decryptPair,
+  decryptPairOutcome,
   pairingSas,
   sessionKeys,
   encryptMessage,
@@ -28,6 +28,26 @@ import { expiryBadge, remainingSeconds } from "./countdown";
 import { probeRelay, type RelayHealth } from "./relay-status";
 import { bestEffortContext } from "./request-context";
 import { track, short, readTelemetry, clearTelemetry } from "../telemetry";
+import { createDenial, showDenialDot } from "./denial";
+async function setDenial(
+  s: State,
+  kind: "otp" | "pairing",
+  reason: string,
+  origin?: string,
+) {
+  s.denial = createDenial(kind, reason, Date.now(), origin);
+  delete s.error;
+  delete s.lastFill;
+  s.status =
+    kind === "otp"
+      ? "OTP request denied on your phone."
+      : "Pairing denied on your phone.";
+  await chrome.alarms.create("denial-expiry", { when: s.denial.unreadUntil });
+  setTimeout(() => {
+    void renderStatusIcon();
+    void updateBadge();
+  }, 30050);
+}
 let chain: Promise<unknown> = Promise.resolve();
 function exclusive<T>(fn: () => Promise<T>): Promise<T> {
   const task = chain.then(fn, fn);
@@ -90,6 +110,7 @@ async function startPair(relayValue: string, browserName: string) {
     phoneConfirmed: false,
     seen: {},
   };
+  delete s.denial;
   s.status = "Scan this QR with OTPBridge on your phone.";
   delete s.error;
   await save(s);
@@ -114,7 +135,13 @@ async function pollPair(s: State) {
     try {
       const kind = JSON.parse(t.payload).kind;
       if (kind === "pair" && !p.response) {
-        const response = decryptPair(p.qr, t.payload);
+        const response = decryptPairOutcome(p.qr, t.payload);
+        if (response.type === "pair.denied") {
+          delete s.pairing;
+          await setDenial(s, "pairing", "denied");
+          track("pair.denied");
+          return;
+        }
         p.response = response;
         p.keys = sessionKeys("browser", p.own, response.phonePublicKey);
         s.status = "Review browser details and approve on your phone.";
@@ -254,6 +281,7 @@ async function requestFill(
     outbound: encryptMessage(d.channelId, d.keys.tx, request),
     sent: false,
   };
+  delete s.denial;
   s.status = "Open OTPBridge on your phone to approve.";
   delete s.error;
   await save(s);
@@ -329,7 +357,7 @@ async function poll(s: State) {
     track("phone.reply", { req: short(m.requestId), type: m.type });
     if (m.type === "fill.denied") {
       delete s.pending;
-      s.status = "Request denied on phone.";
+      await setDenial(s, "otp", m.reason, p.request.origin);
       break;
     }
     if (m.type === "fill.approved") {
@@ -403,6 +431,7 @@ function schedule() {
         } finally {
           await save(s);
           await updateBadge();
+          await renderStatusIcon();
           if (s.lastFill && s.lastFill.validUntil > Date.now())
             startBadgeCountdown();
         }
@@ -430,8 +459,13 @@ async function updateBadge() {
             : "",
   });
   await chrome.action.setTitle({
-    title:
-      seconds > 0 ? `OTPBridge · code expires in ${seconds}s` : "OTPBridge",
+    title: showDenialDot(state.denial)
+      ? state.denial?.kind === "pairing"
+        ? "OTPBridge · pairing denied"
+        : "OTPBridge · OTP request denied"
+      : seconds > 0
+        ? `OTPBridge · code expires in ${seconds}s`
+        : "OTPBridge",
   });
   return seconds;
 }
@@ -493,21 +527,43 @@ async function refreshRelayHealth() {
       }
     }
     relayHealth = next;
-    const paths = Object.fromEntries(
-      [16, 32, 48, 128].map((size) => [
-        size,
-        `icons/icon-${size}${next.reachable ? "-connected" : ""}.png`,
-      ]),
-    );
-    await chrome.action.setIcon({ path: paths });
+    await renderStatusIcon();
     await chrome.storage.session.set({ relayHealth: next });
   })().finally(() => {
     healthInFlight = undefined;
   });
   return healthInFlight;
 }
+async function renderStatusIcon() {
+  const state = await load();
+  const denied = showDenialDot(state.denial);
+  const connected =
+    !!state.device &&
+    relayHealth.reachable &&
+    relayHealth.relay === state.device.relay;
+  const suffix = denied ? "-denied" : connected ? "-connected" : "";
+  await chrome.action.setIcon({
+    path: Object.fromEntries(
+      [16, 32, 48, 128].map((size) => [
+        size,
+        `icons/icon-${size}${suffix}.png`,
+      ]),
+    ),
+  });
+  if (denied)
+    await chrome.action.setTitle({
+      title:
+        state.denial?.kind === "pairing"
+          ? "OTPBridge · pairing denied"
+          : "OTPBridge · OTP request denied",
+    });
+}
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "relay-health") void refreshRelayHealth();
+  if (alarm.name === "denial-expiry") {
+    void renderStatusIcon();
+    void updateBadge();
+  }
 });
 chrome.permissions.onRemoved.addListener(() => {
   relayHealth.checkedAt = 0;
@@ -532,6 +588,7 @@ async function status() {
     status: s.status,
     error: s.error,
     lastFill: s.lastFill ?? null,
+    denial: s.denial ?? null,
     relayPermission,
     relayHealth:
       relayHealth.relay === relay && Date.now() - relayHealth.checkedAt < 90000
@@ -582,6 +639,17 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, respond) => {
       ) {
         await startPair(m.relay, m.browserName);
         schedule();
+      } else if (
+        m.type === "ackDenial" &&
+        sender.url === chrome.runtime.getURL("popup.html")
+      ) {
+        const state = await load();
+        if (state.denial) {
+          state.denial.acknowledged = true;
+          await save(state);
+        }
+        await renderStatusIcon();
+        await updateBadge();
       } else if (m.type === "telemetry") {
         const s = await load();
         let relay: unknown = null;

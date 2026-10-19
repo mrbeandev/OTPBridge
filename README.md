@@ -21,6 +21,10 @@ Extension settings let you disable collection of location, public IP, device hin
 
 A bottom green icon dot means the configured relay passed a recent `/health` check, not that the phone is online. Checks occur about once per minute in the extension; the numeric OTP countdown remains independent. Restore relay permission appears only if that relay host permission is missing. Existing pairings retain their relay—changing Cloudflare deployments does not migrate them; unpair/re-pair to change relays.
 
+Denied OTP and pairing requests show an explicit popup outcome. An unread denial temporarily overrides the relay icon with a red dot for up to 30 seconds; opening the actual popup acknowledges it immediately and restores the relay icon. The denial explanation remains until another attempt starts. Options-page polling does not acknowledge denials. Pairing rejection is authenticated with the scanned QR bootstrap; closing/backing out is not falsely reported as denial.
+
+Home's eye toggle beside Refresh persists across reopening and masks all account codes, including session-unlocked codes, without changing whether an explicit request can be sent.
+
 ## Repository
 
 ```text

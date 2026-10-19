@@ -30,7 +30,15 @@ function App() {
       await refresh();
       if (!stopped) timer = setTimeout(() => void tick(), 2200);
     }
-    void tick();
+    void chrome.runtime
+      .sendMessage({ type: "ackDenial" })
+      .then((result) => {
+        if (!stopped && result) setS(result);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!stopped) void tick();
+      });
     return () => {
       stopped = true;
       clearTimeout(timer);
@@ -39,8 +47,29 @@ function App() {
   return (
     <main className="popup">
       <span className="eyebrow">OTPBRIDGE</span>
-      <h1>Approve on your phone.</h1>
+      <h1>
+        {s.denial
+          ? s.denial.kind === "pairing"
+            ? "Pairing declined"
+            : "OTP request denied"
+          : "Approve on your phone."}
+      </h1>
       <p aria-live="polite">{s.status ?? "Loading…"}</p>
+      {s.denial && (
+        <section role="status" className="denial-card">
+          {s.denial.origin && <strong>{s.denial.origin}</strong>}
+          <p>
+            {s.denial.kind === "pairing"
+              ? "Your phone declined this browser. No connection was created."
+              : "No code was shared. You can start a new request from the OTP input."}
+          </p>
+          <p className="muted">
+            {s.denial.reason === "account-mismatch"
+              ? "The requested account did not match the saved website binding."
+              : new Date(s.denial.at).toLocaleTimeString()}
+          </p>
+        </section>
+      )}
       {s.lastFill && (
         <section>
           <strong>{s.lastFill.origin}</strong>

@@ -232,3 +232,8 @@ kbd {
   white-space: pre-wrap;
   word-break: break-all;
 }
+.diag-summary{display:grid;grid-template-columns:auto 1fr;gap:4px 16px;margin:12px 0;font-size:13px}
+.diag-summary dt{color:var(--muted,#6b6b6b)}
+.diag-summary dd{margin:0;font-weight:600;text-align:right}
+.diag-privacy{background:var(--soft);border-radius:10px;padding:10px 14px;margin:12px 0;font-size:13px}
+.diag-privacy p{margin:4px 0 0}

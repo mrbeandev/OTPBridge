@@ -54,6 +54,9 @@ class MainActivity : FragmentActivity() {
     private val session = ForegroundSession()
     private var sessionEnabled by mutableStateOf(false)
     private var maskAllCodes by mutableStateOf(false)
+    private var diagnosticsOpen by mutableStateOf(false)
+    private var browserMenu by mutableStateOf<String?>(null)
+    private var removeBrowser by mutableStateOf<JSONObject?>(null)
     private var sessionUnlocked by mutableStateOf(false)
     private var now by mutableLongStateOf(System.currentTimeMillis())
     private data class VisibleCode(val code: String, val validUntil: Long)
@@ -213,13 +216,14 @@ class MainActivity : FragmentActivity() {
             Column(Modifier.padding(padding).fillMaxSize().animateContentSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Column { Text(if (tab == 0) "OTPBridge" else "Browsers", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
-                        Text(if (tab == 0) "Accounts & approvals" else "Only devices you trust.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        Text(if (tab == 0) "Accounts & approvals" else "Browsers that can request codes", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    if (tab == 2) IconButton(onClick = { diagnosticsOpen = true }) { Icon(BridgeIcons.Bug, contentDescription = "Diagnostics") }
                     if (tab == 0) Row(verticalAlignment = Alignment.CenterVertically) {
                         IconToggleButton(checked = !maskAllCodes, onCheckedChange = { visible -> maskAllCodes = !visible; getSharedPreferences("preferences", MODE_PRIVATE).edit().putBoolean("maskAllCodes", maskAllCodes).apply() }) { Icon(if(maskAllCodes) BridgeIcons.EyeOff else BridgeIcons.Eye, contentDescription = if(maskAllCodes) "Show account codes" else "Hide all account codes") }
                         TextButton(enabled = !busy, onClick = { operation { refresh(true) } }) { Text("Refresh") }
                     }
                 }
-                Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+                if (tab == 0) Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
                     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) { Text("Unlock once per visit", fontWeight = FontWeight.Medium); Text(if (!sessionEnabled) "Optional · fingerprint for each action" else if (sessionUnlocked) "Unlocked · locks when you leave" else "Locked · fingerprint to reveal and send", style = MaterialTheme.typography.bodySmall) }
@@ -273,29 +277,80 @@ class MainActivity : FragmentActivity() {
                         Text("Keep your recovery codes somewhere safe. No cloud backup.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     2 -> {
-                        Button(onClick = { launchScan("pair") }, modifier = Modifier.fillMaxWidth(), contentPadding = PaddingValues(16.dp)) { Text("Pair a browser") }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(onClick = { val log = Telemetry.read(); startActivity(android.content.Intent.createChooser(android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain").putExtra(android.content.Intent.EXTRA_SUBJECT, "OTPBridge diagnostics").putExtra(android.content.Intent.EXTRA_TEXT, log.ifBlank { "No events yet." }.takeLast(90_000)), "Share diagnostics")) }) { Text("Share diagnostics") }
-                            TextButton(onClick = { Telemetry.clear(); status = "Diagnostics cleared." }) { Text("Clear") }
-                        }
-                        if (browsers.isEmpty()) EmptyState("Connect your browser", "Open the extension settings, create a pairing QR, then scan it here.")
-                        browsers.forEach { d -> Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text(d.getString("browserName"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                            Text(d.getString("relay").removePrefix("https://"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            if (!d.optBoolean("active")) {
-                                val expired = d.getLong("expiresAt") <= System.currentTimeMillis()
-                                Text(if (expired) "Pairing expired. Remove this entry and scan a new QR." else if (d.optBoolean("confirmed")) "Finishing connection automatically…" else "Approval is pending. Remove and scan again if setup was interrupted.")
-                                if (!expired && !d.optBoolean("confirmed")) Button(enabled = !busy, onClick = { operation { network { bridge!!.confirm(d.getString("channelId")) }; refresh(false) } }) { Text("Finish approved pairing") }
-                            } else Text("Connected", style = MaterialTheme.typography.labelLarge)
-                            TextButton(onClick = { operation { network { bridge!!.revoke(d.getString("channelId")) }; refresh(false) } }) { Text("Remove browser") }
-                        } } }
+                        if (browsers.isEmpty()) EmptyState("No browsers yet", "Open the OTPBridge extension settings, create a pairing QR, then scan it here.")
+                        else Text("CONNECTED · ${browsers.count { it.optBoolean("active") }}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        browsers.forEach { d -> BrowserCard(d) }
+                        Button(onClick = { launchScan("pair") }, modifier = Modifier.fillMaxWidth(), contentPadding = PaddingValues(vertical = 14.dp)) { Text("Pair a browser") }
+                        Text("Each browser can only ask for codes. You approve every request here.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
         }
         if (addMenu) AlertDialog(onDismissRequest = { addMenu = false }, title = { Text("Add an account") }, text = { Text("Scan the QR shown by the service, or enter its setup key.") }, confirmButton = { TextButton(onClick = { addMenu = false; launchScan("account") }) { Text("Scan QR code") } }, dismissButton = { TextButton(onClick = { addMenu = false; uriInput = ""; enrollment = true }) { Text("Enter setup key") } })
         if (enrollment) EnrollmentDialog()
+        if (diagnosticsOpen) DiagnosticsSheet()
+        removeBrowser?.let { d -> AlertDialog(onDismissRequest = { removeBrowser = null }, title = { Text("Remove ${d.getString("browserName")}?") }, text = { Text("This browser will no longer be able to request codes. You can pair it again later.") }, confirmButton = { TextButton(onClick = { removeBrowser = null; operation { network { bridge!!.revoke(d.getString("channelId")) }; status = "${d.getString("browserName")} removed."; refresh(false) } }) { Text("Remove") } }, dismissButton = { TextButton(onClick = { removeBrowser = null }) { Text("Keep") } }) }
         deleteAccount?.let { a -> AlertDialog(onDismissRequest = { deleteAccount = null }, title = { Text("Delete this account?") }, text = { Text("${a.issuer.ifBlank { a.label }} will be removed from this phone. This does not disable two-factor authentication on the service. Make sure you have another way to sign in.") }, confirmButton = { TextButton(onClick = { deleteAccount = null; vault.unlock(this, "Delete ${a.issuer.ifBlank { a.label }}", ::error) { key -> vault.delete(key, a.id); loadCatalog(); status = "Account deleted from this phone." } }) { Text("Delete with fingerprint") } }, dismissButton = { TextButton(onClick = { deleteAccount = null }) { Text("Keep account") } }) }
+    }
+    @Composable private fun BrowserCard(d: JSONObject) {
+        val identity = remember(d.toString()) { dev.otpbridge.ui.BrowserIdentity.from(d.optString("browserInfo"), d.optString("deviceInfo")) }
+        val active = d.optBoolean("active"); val expired = !active && d.getLong("expiresAt") <= System.currentTimeMillis()
+        Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(start = 14.dp, top = 12.dp, bottom = 8.dp, end = 4.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    dev.otpbridge.ui.BrowserMark(identity.browser, Modifier.size(40.dp))
+                    Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                        Text(d.getString("browserName"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                        Text(identity.summary.ifBlank { "Browser" }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                    }
+                    Box { IconButton(onClick = { browserMenu = d.getString("channelId") }) { Icon(BridgeIcons.More, contentDescription = "Options for ${d.getString("browserName")}") }
+                        DropdownMenu(expanded = browserMenu == d.getString("channelId"), onDismissRequest = { browserMenu = null }) { DropdownMenuItem(text = { Text("Remove browser") }, onClick = { browserMenu = null; removeBrowser = d }) } }
+                }
+                Row(Modifier.padding(top = 8.dp, end = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Surface(shape = RoundedCornerShape(50), color = if (active) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.surface) {
+                        Text(if (active) "Connected" else if (expired) "Expired" else if (d.optBoolean("confirmed")) "Finishing…" else "Pending", Modifier.padding(horizontal = 10.dp, vertical = 3.dp), style = MaterialTheme.typography.labelSmall, color = if (active) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.onSurface)
+                    }
+                    Text(d.getString("relay").removePrefix("https://"), Modifier.padding(start = 8.dp).weight(1f), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                }
+                if (expired) Text("This pairing expired. Remove it and scan a new QR.", Modifier.padding(top = 6.dp, end = 10.dp), style = MaterialTheme.typography.bodySmall)
+                else if (!active && !d.optBoolean("confirmed")) TextButton(enabled = !busy, onClick = { operation { network { bridge!!.confirm(d.getString("channelId")) }; refresh(false) } }) { Text("Finish approved pairing") }
+            }
+        }
+    }
+    @Composable private fun DiagnosticsSheet() {
+        var summary by remember { mutableStateOf(Telemetry.summary()) }
+        val fmt = remember { java.text.SimpleDateFormat("d MMM, HH:mm", java.util.Locale.getDefault()) }
+        ModalBottomSheet(onDismissRequest = { diagnosticsOpen = false }, containerColor = MaterialTheme.colorScheme.surface) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) { Icon(BridgeIcons.Bug, contentDescription = null); Text("Diagnostics", Modifier.padding(start = 10.dp), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold) }
+                Text("A local log of app activity to help fix bugs. Attach the file to a GitHub issue if something goes wrong.", style = MaterialTheme.typography.bodyMedium)
+                Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+                    Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        listOf("Events recorded" to "${summary.events}", "Errors / rejections" to "${summary.errors}", "Oldest" to (summary.first?.let { fmt.format(java.util.Date(it)) } ?: "—"), "Newest" to (summary.last?.let { fmt.format(java.util.Date(it)) } ?: "—"), "Size" to "${(summary.bytes + 1023) / 1024} KB").forEach { (k, v) ->
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(k, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant); Text(v, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium) }
+                        }
+                    }
+                }
+                Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+                    Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Safe to share", style = MaterialTheme.typography.titleSmall)
+                        Text("Never includes OTP codes, secret keys, relay tokens, encrypted messages, IP addresses, locations, emails or account names. These are removed when recorded and again on export. Stored only on this phone; nothing is uploaded.", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                Button(enabled = summary.events > 0, modifier = Modifier.fillMaxWidth(), onClick = { shareDiagnostics() }) { Text("Share report file (.txt)") }
+                OutlinedButton(enabled = summary.events > 0, modifier = Modifier.fillMaxWidth(), onClick = { Telemetry.clear(); summary = Telemetry.summary(); status = "Diagnostics cleared." }) { Text("Clear log") }
+            }
+        }
+    }
+    private fun shareDiagnostics() {
+        try {
+            val file = Telemetry.exportReport(this, BuildConfig.VERSION_NAME)
+            val uri = androidx.core.content.FileProvider.getUriForFile(this, "${packageName}.diagnostics", file)
+            val send = android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain").putExtra(android.content.Intent.EXTRA_STREAM, uri).putExtra(android.content.Intent.EXTRA_SUBJECT, "OTPBridge diagnostics ${BuildConfig.VERSION_NAME}").addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            send.clipData = android.content.ClipData.newRawUri(file.name, uri)
+            startActivity(android.content.Intent.createChooser(send, "Share diagnostics report"))
+            Telemetry.track("diagnostics.exported")
+        } catch (e: Exception) { status = "Could not create diagnostics file: ${e.javaClass.simpleName}" }
     }
     @Composable private fun PairBrowserScreen(qr: String) {
         BackHandler { pairQr = null }
@@ -452,7 +507,7 @@ class MainActivity : FragmentActivity() {
         dev.otpbridge.relay.RelayClient.cancelAll()
         vault.cancel()
         session.lock(); sessionUnlocked = false; visibleCodes = emptyMap(); lastSessionStep = null; tab = 0; selectedRequest = null; selectedAccount = null; deleteAccount = null; accountMenu = null; addMenu = false
-        approveBinding = false; uriInput = ""; enrollment = false; pairQr = null; busy = false
+        approveBinding = false; uriInput = ""; enrollment = false; pairQr = null; busy = false; diagnosticsOpen = false; browserMenu = null; removeBrowser = null
         super.onStop()
     }
 }

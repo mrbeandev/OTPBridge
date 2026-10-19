@@ -3,6 +3,7 @@ package dev.otpbridge
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.compose.setContent
+import androidx.activity.compose.BackHandler
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.animation.AnimatedVisibility
@@ -184,6 +185,10 @@ class MainActivity : FragmentActivity() {
         }
     }
     @Composable private fun Screen() {
+        selectedRequest?.let { request ->
+            ReviewScreen(request)
+            return
+        }
         Scaffold(
             bottomBar = {
                 NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
@@ -297,9 +302,9 @@ class MainActivity : FragmentActivity() {
                 }
             }
         }
-        selectedRequest?.let { request -> ReviewSheet(request) }
     }
-    @Composable private fun ReviewSheet(request: PhoneBridge.Pending) {
+    @Composable private fun ReviewScreen(request: PhoneBridge.Pending) {
+        BackHandler { selectedRequest = null; selectedAccount = null; approveBinding = false }
         var showDetails by remember(request.key) { mutableStateOf(false) }
         val body = request.body
         val context = body.optJSONObject("context")
@@ -307,11 +312,30 @@ class MainActivity : FragmentActivity() {
         val left = CodeTiming.secondsRemaining(now, body.getLong("expiresAt"))
         val ref = body.optString("accountRef", "")
         val choices = accounts.filter { ref.isEmpty() || it.id == ref }
-        ModalBottomSheet(onDismissRequest = { selectedRequest = null }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = MaterialTheme.colorScheme.surface, dragHandle = { BottomSheetDefaults.DragHandle() }) {
-            Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Scaffold(
+            topBar = {
+                TopAppBar(title = { Text("Review request", style = MaterialTheme.typography.titleMedium) }, navigationIcon = {
+                    IconButton(onClick = { selectedRequest = null; selectedAccount = null; approveBinding = false }) { Icon(BridgeIcons.Back, contentDescription = "Back to Home") }
+                })
+            },
+            bottomBar = {
+                Surface(shadowElevation = 4.dp) {
+                    Column(Modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                        if (status.isNotBlank()) Text(status, style = MaterialTheme.typography.bodySmall)
+                        Text(if (left > 0) "Only this code is shared. Your secret stays on this phone." else "This request expired. Ask for a new code in your browser.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(enabled = !busy && left > 0, onClick = { val r = request; selectedRequest = null; operation { network { bridge!!.deny(r) }; refresh(false) } }, modifier = Modifier.weight(1f)) { Text("Deny") }
+                            Button(enabled = selectedAccount != null && !busy && left > 0, modifier = Modifier.weight(2f), onClick = ::approve) { Text(if (sessionEnabled && sessionUnlocked) "Send code" else "Approve with fingerprint") }
+                        }
+                    }
+                }
+            }
+        ) { padding ->
+            Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(body.getString("origin").removePrefix("https://"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                    Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                        Text(body.getString("origin").removePrefix("https://"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                         Text(listOfNotNull(body.getString("browserName"), browser?.let { "${it.getString("name")} ${it.getString("version").substringBefore('.')}" }, device?.optString("os")?.takeIf { it.isNotBlank() }).joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
                     }
                     Surface(shape = RoundedCornerShape(50), color = if (left <= 15) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.surfaceVariant) {
@@ -328,7 +352,7 @@ class MainActivity : FragmentActivity() {
                         }
                     }
                     AnimatedVisibility(showDetails) {
-                        Column(Modifier.fillMaxWidth().heightIn(max = 300.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             dev.otpbridge.protocol.RequestContext.lines(context).forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
                             location?.let { dev.otpbridge.ui.LocationPreview(it) }
                             Text("Browser-provided context, not proof of identity.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -337,7 +361,8 @@ class MainActivity : FragmentActivity() {
                 }
                 if (needsMigration) TextButton(onClick = ::migrateCatalog) { Text("Unlock once to update account list") }
                 if (choices.isEmpty() && !needsMigration) Text("Add an authenticator account first.", style = MaterialTheme.typography.bodyMedium)
-                Column(Modifier.fillMaxWidth().heightIn(max = 168.dp).verticalScroll(rememberScrollState())) {
+                Text("Choose an account", style = MaterialTheme.typography.titleSmall)
+                Column(Modifier.fillMaxWidth()) {
                     choices.forEach { a ->
                         val selected = selectedAccount == a.id
                         Surface(shape = RoundedCornerShape(12.dp), color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp).clickable { selectedAccount = a.id }) {
@@ -348,10 +373,6 @@ class MainActivity : FragmentActivity() {
                             }
                         }
                     }
-                }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { val r = request; selectedRequest = null; operation { network { bridge!!.deny(r) }; refresh(false) } }, modifier = Modifier.weight(1f)) { Text("Deny") }
-                    Button(enabled = selectedAccount != null && !busy && left > 0, modifier = Modifier.weight(2f), onClick = ::approve) { Text(if (sessionEnabled && sessionUnlocked) "Send code" else "Approve with fingerprint") }
                 }
             }
         }

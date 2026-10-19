@@ -9,6 +9,7 @@ import androidx.compose.ui.unit.dp
 
 /** Small bundled vector set: no text glyphs, icon font or network resources. */
 object BridgeIcons {
+    val Back = ImageVector.Builder("Back",24.dp,24.dp,24f,24f).apply { path(fill=SolidColor(Color.Black)) { moveTo(20f,11f);lineTo(7.83f,11f);lineTo(13.42f,5.41f);lineTo(12f,4f);lineTo(4f,12f);lineTo(12f,20f);lineTo(13.42f,18.59f);lineTo(7.83f,13f);lineTo(20f,13f);close() } }.build()
     val Accounts = ImageVector.Builder("Accounts",24.dp,24.dp,24f,24f).apply {
         path(fill=SolidColor(Color.Black)) { moveTo(3f,3f); lineTo(10f,3f); lineTo(10f,10f); lineTo(3f,10f); close(); moveTo(14f,3f);lineTo(21f,3f);lineTo(21f,10f);lineTo(14f,10f);close();moveTo(3f,14f);lineTo(10f,14f);lineTo(10f,21f);lineTo(3f,21f);close();moveTo(14f,14f);lineTo(21f,14f);lineTo(21f,21f);lineTo(14f,21f);close() }
     }.build()

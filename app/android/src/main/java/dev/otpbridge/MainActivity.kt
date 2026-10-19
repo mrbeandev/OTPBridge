@@ -136,10 +136,12 @@ class MainActivity : FragmentActivity() {
         Telemetry.track("app.create")
         vault = Vault(this)
         loadCatalog()
-        sessionEnabled = getSharedPreferences("preferences", MODE_PRIVATE).getBoolean("foregroundSession", false)
+        // Unlock once per visit is the default; an explicit user choice is respected.
+        sessionEnabled = getSharedPreferences("preferences", MODE_PRIVATE).getBoolean("foregroundSession", true)
         maskAllCodes = getSharedPreferences("preferences", MODE_PRIVATE).getBoolean("maskAllCodes", false)
         lifecycleScope.launch { repeatOnLifecycle(Lifecycle.State.STARTED) {
-            if (sessionEnabled && !session.unlocked) unlockSession()
+            // No prompt on an empty vault; first unlock happens when a code is needed.
+            if (sessionEnabled && !session.unlocked && accounts.isNotEmpty()) unlockSession()
             while (isActive) { now = System.currentTimeMillis(); tickCodes(); delay(250) }
         } }
         runCatching { bridge = PhoneBridge(this); browsers = bridge!!.list() }.onFailure { status = "Device storage unavailable: ${it.message}" }

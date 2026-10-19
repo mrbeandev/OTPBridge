@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -10,9 +12,28 @@ android {
         applicationId = "dev.otpbridge"
         minSdk = 29
         targetSdk = 35
-        versionCode = 12
-        versionName = "0.12.0"
+        versionCode = 13
+        versionName = "1.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+    // Release signing comes from a git-ignored properties file (or env var path).
+    // Without it, release builds fail instead of silently using a debug key.
+    val signingFile = rootProject.file(System.getenv("OTPBRIDGE_SIGNING") ?: "../secrets/release-signing.properties")
+    val signing = Properties().apply { if (signingFile.exists()) signingFile.inputStream().use { load(it) } }
+    signingConfigs {
+        if (signing.isNotEmpty()) create("release") {
+            storeFile = file(signing.getProperty("storeFile"))
+            storePassword = signing.getProperty("storePassword")
+            keyAlias = signing.getProperty("keyAlias")
+            keyPassword = signing.getProperty("keyPassword")
+        }
+    }
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            isDebuggable = false
+            signingConfig = signingConfigs.findByName("release")
+        }
     }
     buildFeatures { compose = true; buildConfig = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }

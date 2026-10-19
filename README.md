@@ -8,7 +8,7 @@ Phone-approved TOTP autofill for Chrome, with a self-hosted, content-blind Cloud
 
 1. Right-click a supported OTP input and choose **Fill from phone**, or focus it and press **Alt+Shift+O**.
 2. Manually open the Android app. It fetches pending encrypted requests while foregrounded.
-3. Review the exact website, browser and account, then approve with strong biometrics. Optional **Unlock once per visit** remembers your mode choice: one fingerprint on each app opening reveals live codes and lets you explicitly send during that foreground visit, without another prompt.
+3. Review the exact website, browser and account, then approve with strong biometrics. **Unlock once per visit** is on by default: one fingerprint on each app opening reveals live codes and lets you explicitly send during that visit without another prompt. Turn it off for a fingerprint on every reveal and send.
 4. Your phone generates one TOTP, encrypts the response, and Chrome fills the original input without submitting. The extension toolbar badge and popup show seconds until that filled code expires.
 
 Home combines accounts and approvals in one compact screen. Incoming requests animate into a section above the account list, pushing accounts down; no separate Requests tab is needed. Account codes reveal inline with live seconds/progress; session mode rotates them automatically. Backgrounding always clears session keys and visible codes, but keeps the mode toggle enabled for the next opening.

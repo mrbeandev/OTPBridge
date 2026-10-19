@@ -32,8 +32,17 @@ class Vault(private val context: Context) {
     val initialized get() = prefs.contains("wrapped")
     val needsCatalogMigration get() = prefs.contains("accounts") && !prefs.contains("catalog")
     fun summaries(): List<AccountSummary> = prefs.getString("catalog", null)?.let(AccountSummaryCodec::decode) ?: emptyList()
-    private fun summary(records: List<AccountRecord>) = records.map { (id, a) -> AccountSummary(id, a.label, a.issuer, a.algorithm, a.digits, a.period) }
+    // Domains live in the catalog only (not secret); keep them across encrypted rewrites.
+    private fun summary(records: List<AccountRecord>, domains: Map<String, String> = summaries().associate { it.id to it.domain }) =
+        records.map { (id, a) -> AccountSummary(id, a.label, a.issuer, a.algorithm, a.digits, a.period, domains[id].orEmpty()) }
     fun migrateCatalog(key: ByteArray) { val records = accounts(key); check(prefs.edit().putString("catalog", AccountSummaryCodec.encode(summary(records))).commit()) { "Could not migrate account list" } }
+    /** Updates display info (issuer, label, domain). The secret and code settings are never changed. */
+    fun edit(key: ByteArray, id: String, issuer: String, label: String, domain: String) {
+        val records = accounts(key); val target = records.firstOrNull { it.id == id } ?: throw IllegalArgumentException("Account no longer exists")
+        val updated = records.map { if (it.id == id) it.copy(account = Totp.validate(target.account.copy(issuer = issuer.trim(), label = label.trim()))) else it }
+        val domains = summaries().associate { it.id to it.domain } + (id to AccountDomain.normalize(domain))
+        save(key, updated, domains)
+    }
     fun delete(key: ByteArray, id: String) { val records = accounts(key); require(records.any { it.id == id }) { "Account no longer exists" }; save(key, records.filterNot { it.id == id }) }
 
     fun biometricStatus(): Int = BiometricManager.from(context).canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)
@@ -109,14 +118,14 @@ class Vault(private val context: Context) {
         return fresh.size
     }
     fun add(key: ByteArray, account: TotpAccount) = save(key, accounts(key) + AccountRecord(Base64.encodeToString(ByteArray(32).also { SecureRandom().nextBytes(it) }, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING), Totp.validate(account)))
-    fun save(key: ByteArray, records: List<AccountRecord>) {
+    fun save(key: ByteArray, records: List<AccountRecord>, domains: Map<String, String> = summaries().associate { it.id to it.domain }) {
         val array = JSONArray()
         records.forEach { (id, a) -> array.put(JSONObject().put("id", id).put("label", a.label).put("issuer", a.issuer).put("secret", a.secret).put("algorithm", a.algorithm).put("digits", a.digits).put("period", a.period)) }
         val plain = array.toString().toByteArray()
         try {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES")) }
             val encrypted = JSONObject().put("iv", b64(cipher.iv)).put("data", b64(cipher.doFinal(plain))).toString()
-            check(prefs.edit().putString("accounts", encrypted).putString("catalog", AccountSummaryCodec.encode(summary(records))).commit()) { "Could not save accounts" }
+            check(prefs.edit().putString("accounts", encrypted).putString("catalog", AccountSummaryCodec.encode(summary(records, domains))).commit()) { "Could not save accounts" }
         } finally { plain.fill(0) }
     }
 }

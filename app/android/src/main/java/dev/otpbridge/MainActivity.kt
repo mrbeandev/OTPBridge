@@ -55,6 +55,7 @@ class MainActivity : FragmentActivity() {
     private var sessionEnabled by mutableStateOf(false)
     private var maskAllCodes by mutableStateOf(false)
     private var diagnosticsOpen by mutableStateOf(false)
+    private var editAccount by mutableStateOf<AccountSummary?>(null)
     private var importOpen by mutableStateOf(false)
     private var importEntries by mutableStateOf<List<dev.otpbridge.totp.AuthenticatorImport.Entry>>(emptyList())
     private var importSkipped by mutableStateOf<List<dev.otpbridge.totp.AuthenticatorImport.Skipped>>(emptyList())
@@ -169,7 +170,8 @@ class MainActivity : FragmentActivity() {
         selectedRequest = request; approveBinding = true
         val ref = request.body.optString("accountRef", "")
         val choices = accounts.filter { ref.isEmpty() || it.id == ref }
-        selectedAccount = choices.singleOrNull()?.id
+        val host = dev.otpbridge.vault.AccountDomain.hostOf(request.body.optString("origin"))
+        selectedAccount = choices.singleOrNull()?.id ?: dev.otpbridge.vault.AccountDomain.matches(choices, host).singleOrNull()?.id
     }
     private fun authorize(reason: String, action: (ByteArray) -> Unit) {
         if (sessionEnabled && session.unlocked) { try { session.use(action) } catch (e: Exception) { error(e.message ?: "Session operation failed") } }
@@ -302,13 +304,13 @@ class MainActivity : FragmentActivity() {
                         if (needsMigration) Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceVariant) { Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { Text("Update your account list", fontWeight = FontWeight.SemiBold); Text("Unlock once to show names without unlocking codes. Your existing secrets stay unchanged.", style = MaterialTheme.typography.bodySmall); Button(onClick = ::migrateCatalog) { Text("Update with fingerprint") } } }
                         if (accounts.isNotEmpty()) OutlinedTextField(search, { search = it }, placeholder = { Text("Search accounts") }, modifier = Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(18.dp))
                         if (accounts.isEmpty() && !needsMigration) EmptyState("Your codes, safely kept", "Add your first account with a setup QR or secret key. Names stay visible; codes stay locked.")
-                        accounts.filter { search.isBlank() || "${it.issuer} ${it.label}".contains(search, true) }.forEach { a ->
+                        dev.otpbridge.vault.AccountSearch.filter(accounts, search, force = true).forEach { a ->
                             Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface) {
                                 Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                         Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant) { Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) { Text((a.issuer.ifBlank { a.label }).take(1).uppercase(), fontWeight = FontWeight.Bold) } }
-                                        Column(Modifier.weight(1f).padding(horizontal = 10.dp)) { Text(a.issuer.ifBlank { a.label }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold); if (a.issuer.isNotBlank()) Text(a.label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                                        Box { IconButton(onClick = { accountMenu = a.id }) { Icon(BridgeIcons.More, contentDescription = "Account options for ${a.label}") }; DropdownMenu(expanded = accountMenu == a.id, onDismissRequest = { accountMenu = null }) { DropdownMenuItem(text = { Text("Delete account") }, onClick = { accountMenu = null; deleteAccount = a }) } }
+                                        Column(Modifier.weight(1f).padding(horizontal = 10.dp)) { Text(a.issuer.ifBlank { a.label }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold); if (a.issuer.isNotBlank()) Text(a.label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant); if (a.domain.isNotEmpty()) Text(a.domain, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                                        Box { IconButton(onClick = { accountMenu = a.id }) { Icon(BridgeIcons.More, contentDescription = "Account options for ${a.label}") }; DropdownMenu(expanded = accountMenu == a.id, onDismissRequest = { accountMenu = null }) { DropdownMenuItem(text = { Text("Edit") }, onClick = { accountMenu = null; editAccount = a }); DropdownMenuItem(text = { Text("Delete account") }, onClick = { accountMenu = null; deleteAccount = a }) } }
                                     }
                                     val shown = visibleCodes[a.id]?.takeIf { it.validUntil > now && !maskAllCodes }
                                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -349,6 +351,7 @@ class MainActivity : FragmentActivity() {
         }, confirmButton = { TextButton(onClick = { addMenu = false }) { Text("Close") } })
         if (enrollment) EnrollmentDialog()
         if (diagnosticsOpen) DiagnosticsSheet()
+        editAccount?.let { EditAccountDialog(it) }
         removeBrowser?.let { d -> AlertDialog(onDismissRequest = { removeBrowser = null }, title = { Text("Remove ${d.getString("browserName")}?") }, text = { Text("This browser will no longer be able to request codes. You can pair it again later.") }, confirmButton = { TextButton(onClick = { removeBrowser = null; operation { network { bridge!!.revoke(d.getString("channelId")) }; status = "${d.getString("browserName")} removed."; refresh(false) } }) { Text("Remove") } }, dismissButton = { TextButton(onClick = { removeBrowser = null }) { Text("Keep") } }) }
         deleteAccount?.let { a -> AlertDialog(onDismissRequest = { deleteAccount = null }, title = { Text("Delete this account?") }, text = { Text("${a.issuer.ifBlank { a.label }} will be removed from this phone. This does not disable two-factor authentication on the service. Make sure you have another way to sign in.") }, confirmButton = { TextButton(onClick = { deleteAccount = null; vault.unlock(this, "Delete ${a.issuer.ifBlank { a.label }}", ::error) { key -> vault.delete(key, a.id); loadCatalog(); status = "Account deleted from this phone." } }) { Text("Delete with fingerprint") } }, dismissButton = { TextButton(onClick = { deleteAccount = null }) { Text("Keep account") } }) }
     }
@@ -437,6 +440,27 @@ class MainActivity : FragmentActivity() {
                 else if (!active && !d.optBoolean("confirmed")) TextButton(enabled = !busy, onClick = { operation { network { bridge!!.confirm(d.getString("channelId")) }; refresh(false) } }) { Text("Finish approved pairing") }
             }
         }
+    }
+    @Composable private fun EditAccountDialog(a: AccountSummary) {
+        var issuer by remember(a.id) { mutableStateOf(a.issuer) }
+        var label by remember(a.id) { mutableStateOf(a.label) }
+        var domain by remember(a.id) { mutableStateOf(a.domain) }
+        val domainError = remember(domain) { runCatching { dev.otpbridge.vault.AccountDomain.normalize(domain) }.exceptionOrNull()?.message }
+        val labelError = if (label.isBlank()) "Account name is required" else null
+        AlertDialog(onDismissRequest = { editAccount = null }, title = { Text("Edit account") }, text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(issuer, { issuer = it.take(200) }, label = { Text("Service name") }, placeholder = { Text("GitHub") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(label, { label = it.take(200) }, label = { Text("Account") }, placeholder = { Text("you@example.com") }, singleLine = true, isError = labelError != null, supportingText = { labelError?.let { Text(it) } }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(domain, { domain = it.take(253) }, label = { Text("Website domain") }, placeholder = { Text("github.com") }, singleLine = true, isError = domainError != null,
+                    supportingText = { Text(domainError ?: "Requests from this site (and its subdomains) select this account automatically.") }, modifier = Modifier.fillMaxWidth())
+                Text("The secret key and code settings can't be changed here.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }, confirmButton = {
+            TextButton(enabled = domainError == null && labelError == null && !busy, onClick = {
+                val id = a.id; val i = issuer; val l = label; val d = domain
+                authorize("Edit ${a.issuer.ifBlank { a.label }}") { key -> vault.edit(key, id, i, l, d); loadCatalog(); editAccount = null; lastSessionStep = null; status = "Account updated."; Telemetry.track("account.edited", "hasDomain" to d.isNotBlank()) }
+            }) { Text("Save") }
+        }, dismissButton = { TextButton(onClick = { editAccount = null }) { Text("Cancel") } })
     }
     @Composable private fun DiagnosticsSheet() {
         var summary by remember { mutableStateOf(Telemetry.summary()) }
@@ -527,9 +551,12 @@ class MainActivity : FragmentActivity() {
         val left = CodeTiming.secondsRemaining(now, body.getLong("expiresAt"))
         val ref = body.optString("accountRef", "")
         val choices = accounts.filter { ref.isEmpty() || it.id == ref }
-        var accountQuery by remember(request.key) { mutableStateOf("") }
-        val showSearch = dev.otpbridge.vault.AccountSearch.shouldShow(choices)
-        val filteredChoices = dev.otpbridge.vault.AccountSearch.filter(choices, accountQuery)
+        val requestHost = remember(request.key) { dev.otpbridge.vault.AccountDomain.hostOf(body.optString("origin")) }
+        val hostMatches = remember(request.key, accounts) { dev.otpbridge.vault.AccountDomain.matches(choices, requestHost) }
+        // Prefill with the requesting domain only when it finds something; otherwise show everything.
+        var accountQuery by remember(request.key) { mutableStateOf(if (hostMatches.isNotEmpty()) requestHost else "") }
+        val showSearch = choices.size > 1 && (dev.otpbridge.vault.AccountSearch.shouldShow(choices) || accountQuery.isNotEmpty())
+        val filteredChoices = dev.otpbridge.vault.AccountSearch.filter(choices, accountQuery, force = true)
         Scaffold(
             topBar = {
                 TopAppBar(title = { Text("Review request", style = MaterialTheme.typography.titleMedium) }, navigationIcon = {
@@ -580,8 +607,10 @@ class MainActivity : FragmentActivity() {
                 if (needsMigration) TextButton(onClick = ::migrateCatalog) { Text("Unlock once to update account list") }
                 if (choices.isEmpty() && !needsMigration) Text("Add an authenticator account first.", style = MaterialTheme.typography.bodyMedium)
                 Text("Choose an account", style = MaterialTheme.typography.titleSmall)
-                if (showSearch) OutlinedTextField(value = accountQuery, onValueChange = { query -> accountQuery = query; if (dev.otpbridge.vault.AccountSearch.filter(choices, query).none { it.id == selectedAccount }) selectedAccount = null }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Search accounts") }, placeholder = { Text("Name, issuer or email") }, trailingIcon = { if (accountQuery.isNotEmpty()) TextButton(onClick = { accountQuery = "" }) { Text("Clear") } })
+                if (showSearch) OutlinedTextField(value = accountQuery, onValueChange = { query -> accountQuery = query; if (dev.otpbridge.vault.AccountSearch.filter(choices, query, force = true).none { it.id == selectedAccount }) selectedAccount = null }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Search accounts") }, placeholder = { Text("Name, issuer or email") }, trailingIcon = { if (accountQuery.isNotEmpty()) TextButton(onClick = { accountQuery = "" }) { Text("Clear") } })
                 if (showSearch && filteredChoices.isEmpty()) Text("No matching accounts.", style = MaterialTheme.typography.bodySmall)
+                if (requestHost.isNotEmpty() && hostMatches.isEmpty() && choices.size > 1) Text("No account is linked to $requestHost yet. Pick one below, then use ⋮ › Edit on Home to link it for next time.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (hostMatches.size > 1) Text("${hostMatches.size} accounts match $requestHost — choose which one.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Column(Modifier.fillMaxWidth()) {
                     filteredChoices.forEach { a ->
                         val selected = selectedAccount == a.id
@@ -652,7 +681,7 @@ class MainActivity : FragmentActivity() {
         dev.otpbridge.relay.RelayClient.cancelAll()
         vault.cancel()
         session.lock(); sessionUnlocked = false; visibleCodes = emptyMap(); lastSessionStep = null; tab = 0; selectedRequest = null; selectedAccount = null; deleteAccount = null; accountMenu = null; addMenu = false
-        approveBinding = false; uriInput = ""; enrollment = false; pairQr = null; busy = false; diagnosticsOpen = false; browserMenu = null; removeBrowser = null; if (scanMode != "import") { importOpen = false; resetImport() }
+        approveBinding = false; uriInput = ""; enrollment = false; pairQr = null; busy = false; diagnosticsOpen = false; editAccount = null; browserMenu = null; removeBrowser = null; if (scanMode != "import") { importOpen = false; resetImport() }
         super.onStop()
     }
 }

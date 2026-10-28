@@ -59,4 +59,22 @@ class AccountDomainTest {
         val legacy = """[{"id":"x","label":"l","issuer":"i","algorithm":"SHA1","digits":6,"period":30}]"""
         assertEquals("", AccountSummaryCodec.decode(legacy)[0].domain)
     }
+
+    // Regression: an older account with a linked domain must not hide a newer, unlinked
+    // account for the same site. Both must be visible and neither silently auto-selected.
+    @Test fun secondAccountOnSameSiteIsNeverHiddenByOlderLinkedOne() {
+        val old = acct("old", issuer = "Example", label = "first@x.com", domain = "example.com")
+        val new = acct("new", issuer = "Example", label = "second@x.com")
+        val other = acct("other", issuer = "Unrelated")
+        val list = listOf(old, new, other)
+        assertEquals(listOf(old), AccountDomain.matches(list, "example.com")) // ranking unchanged
+        assertEquals(listOf(old, new), AccountDomain.related(list, "example.com"))
+        assertNull(AccountDomain.autoSelect(list, "example.com"))
+        assertEquals(setOf("old", "new"), AccountSearch.filter(list, "example.com", force = true).map { it.id }.toSet())
+    }
+
+    @Test fun singleRelatedAccountIsStillAutoSelected() {
+        val only = acct("1", issuer = "GitHub", domain = "github.com")
+        assertEquals(only, AccountDomain.autoSelect(listOf(only, acct("2", issuer = "Other")), "github.com"))
+    }
 }

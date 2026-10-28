@@ -218,8 +218,18 @@ describe("authenticated encrypted protocol", () => {
       assertApproval(r, { ...a, origin: "https://evil.com" }, now),
     ).toThrow();
     expect(() => assertApproval(r, a, a.validUntil - 1000)).toThrow();
+    // A remembered account is only a hint: the phone user may pick another
+    // account for the same site (e.g. two logins on one domain).
     expect(() =>
       assertApproval({ ...r, accountRef: randomId() }, a, now),
+    ).not.toThrow();
+    // ...but switching account never relaxes origin/request/expiry binding.
+    expect(() =>
+      assertApproval(
+        { ...r, accountRef: randomId() },
+        { ...a, origin: "https://evil.com" },
+        now,
+      ),
     ).toThrow();
   });
   it("requires safe relay origin and canonical encodings", () => {

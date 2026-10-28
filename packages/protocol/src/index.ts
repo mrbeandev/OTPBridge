@@ -461,8 +461,8 @@ export function assertApproval(
     response.validFrom > now + 1000
   )
     throw new Error("Approval does not match live request");
-  if (request.accountRef && request.accountRef !== response.accountRef)
-    throw new Error("Account mismatch");
+  // request.accountRef is only a preselection hint: the phone user may approve a
+  // different account for this site, which then becomes the remembered choice.
 }
 async function boundedResponseJson(response: Response): Promise<unknown> {
   const reader = response.body?.getReader();

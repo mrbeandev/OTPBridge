@@ -36,4 +36,16 @@ object AccountDomain {
         val best = scored.maxOfOrNull { it.second } ?: return emptyList()
         return scored.filter { it.second == best }.map { it.first }
     }
+
+    /** Every account related to the host at all, best first. Used for the visible list. */
+    fun related(accounts: List<AccountSummary>, host: String): List<AccountSummary> =
+        accounts.map { it to score(it, host) }.filter { it.second > 0 }.sortedByDescending { it.second }.map { it.first }
+
+    /**
+     * Account to preselect, or null to make the user choose. Only auto-selects when exactly one
+     * account relates to the host at any strength, so a second login on the same site is never hidden
+     * behind an older, better-linked one.
+     */
+    fun autoSelect(accounts: List<AccountSummary>, host: String): AccountSummary? =
+        related(accounts, host).singleOrNull()
 }

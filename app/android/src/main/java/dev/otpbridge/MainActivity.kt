@@ -210,10 +210,15 @@ class MainActivity : FragmentActivity() {
     private fun review(request: PhoneBridge.Pending) {
         if (request.body.getLong("expiresAt") <= System.currentTimeMillis()) { status = "This request expired. Start a new one in the browser."; return }
         selectedRequest = request; approveBinding = true
+        // The browser's remembered account is only a preselection; every account stays choosable.
         val ref = request.body.optString("accountRef", "")
-        val choices = accounts.filter { ref.isEmpty() || it.id == ref }
+        val choices = accounts
         val host = dev.otpbridge.vault.AccountDomain.hostOf(request.body.optString("origin"))
-        selectedAccount = choices.singleOrNull()?.id ?: dev.otpbridge.vault.AccountDomain.matches(choices, host).singleOrNull()?.id
+        // Never silently pick one of several same-site accounts: preselect only when unambiguous.
+        val related = dev.otpbridge.vault.AccountDomain.related(choices, host)
+        selectedAccount = choices.singleOrNull()?.id
+            ?: dev.otpbridge.vault.AccountDomain.autoSelect(choices, host)?.id
+            ?: choices.firstOrNull { it.id == ref && related.size <= 1 }?.id
     }
     private fun authorize(reason: String, action: (ByteArray) -> Unit) {
         if (sessionEnabled && session.unlocked) { try { session.use(action) } catch (e: Exception) { error(e.message ?: "Session operation failed") } }
@@ -630,13 +635,17 @@ class MainActivity : FragmentActivity() {
         val device = context?.optJSONObject("device"); val browser = context?.optJSONObject("browser"); val location = context?.optJSONObject("location")
         val left = CodeTiming.secondsRemaining(now, body.getLong("expiresAt"))
         val ref = body.optString("accountRef", "")
-        val choices = accounts.filter { ref.isEmpty() || it.id == ref }
+        val choices = accounts
         val requestHost = remember(request.key) { dev.otpbridge.vault.AccountDomain.hostOf(body.optString("origin")) }
-        val hostMatches = remember(request.key, accounts) { dev.otpbridge.vault.AccountDomain.matches(choices, requestHost) }
-        // Prefill with the requesting domain only when it finds something; otherwise show everything.
-        var accountQuery by remember(request.key) { mutableStateOf(if (hostMatches.isNotEmpty()) requestHost else "") }
-        val showSearch = choices.size > 1 && (dev.otpbridge.vault.AccountSearch.shouldShow(choices) || accountQuery.isNotEmpty())
+        // Best-ranked accounts (auto-select only if exactly one), but every account related to the
+        // site in any way stays visible, so a second login on the same domain can always be chosen.
+        val hostMatches = remember(request.key, accounts) { dev.otpbridge.vault.AccountDomain.related(choices, requestHost) }
+        val anyMatch = remember(request.key, accounts) { hostMatches.size + choices.count { it.id == ref && it !in hostMatches } }
+        var accountQuery by remember(request.key) { mutableStateOf(if (anyMatch > 0) requestHost else "") }
+        // Always offer manual search when there is more than one account.
+        val showSearch = choices.size > 1
         val filteredChoices = dev.otpbridge.vault.AccountSearch.filter(choices, accountQuery, force = true)
+            .let { list -> if (ref.isNotEmpty() && accountQuery == requestHost && list.none { it.id == ref }) list + choices.filter { it.id == ref } else list }
         Scaffold(
             topBar = {
                 TopAppBar(title = { Text("Review request", style = MaterialTheme.typography.titleMedium) }, navigationIcon = {
@@ -690,7 +699,7 @@ class MainActivity : FragmentActivity() {
                 if (showSearch) OutlinedTextField(value = accountQuery, onValueChange = { query -> accountQuery = query; if (dev.otpbridge.vault.AccountSearch.filter(choices, query, force = true).none { it.id == selectedAccount }) selectedAccount = null }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Search accounts") }, placeholder = { Text("Name, issuer or email") }, trailingIcon = { if (accountQuery.isNotEmpty()) TextButton(onClick = { accountQuery = "" }) { Text("Clear") } })
                 if (showSearch && filteredChoices.isEmpty()) Text("No matching accounts.", style = MaterialTheme.typography.bodySmall)
                 if (requestHost.isNotEmpty() && hostMatches.isEmpty() && choices.size > 1) Text("No account is linked to $requestHost yet. Pick one below, then use ⋮ › Edit on Home to link it for next time.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (hostMatches.size > 1) Text("${hostMatches.size} accounts match $requestHost — choose which one.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (hostMatches.size > 1) Text("${hostMatches.size} accounts match $requestHost — choose which one. Clear the search to see all accounts.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Column(Modifier.fillMaxWidth()) {
                     filteredChoices.forEach { a ->
                         val selected = selectedAccount == a.id

@@ -237,13 +237,6 @@ class PhoneBridge(context: Context) {
                 terminals.keys().asSequence().toList().forEach { if (terminals.getLong(it) < time) terminals.remove(it) }
                 val pending = Pending(channel, body)
                 if (terminals.has(requestId) || requests.containsKey(pending.key)) { Telemetry.track("request.duplicate", "req" to Telemetry.short(requestId), "terminal" to terminals.has(requestId)); durable { seen.put(id, expiry + 300000) }; return }
-                if (ref.isNotEmpty() && d.getJSONObject("origins").optString(site) != ref) {
-                    val response = denial(body, "account-mismatch")
-                    val outbound = envelope(d, response)
-                    durable { seen.put(id, expiry + 300000); terminal(d, requestId); append(d, outbound) }
-                    Telemetry.track("request.auto-denied", "req" to Telemetry.short(requestId), "reason" to "account-mismatch")
-                    return
-                }
                 require(requests.values.count { it.channel == channel } < 16) { "Too many pending requests" }
                 durable { seen.put(id, expiry + 300000); requests[pending.key] = pending; val saved = d.optJSONObject("pending") ?: JSONObject().also { d.put("pending", it) }; saved.put(requestId, body) }
                 Telemetry.track("request.pending", "req" to Telemetry.short(requestId), "origin" to site, "hasContext" to body.has("context"))
@@ -271,8 +264,9 @@ class PhoneBridge(context: Context) {
         operationToken = RelayClient.foregroundToken()
         val (d, body) = current(reviewed); requireId(accountRef)
         val time = now(); require(otp.matches(Regex("(?:[0-9]{6}|[0-9]{8})")) && validFrom <= time && validUntil - time >= 2000 && validUntil > validFrom) { "Code expired" }
-        val site = body.getString("origin"); val requestedRef = body.optString("accountRef", "")
-        require(requestedRef.isEmpty() || (requestedRef == accountRef && d.getJSONObject("origins").optString(site) == accountRef)) { "Account binding changed; request again" }
+        // The request's accountRef is only the browser's last-used hint; the account the user
+        // explicitly picked and approved wins, and becomes the new remembered choice for this site.
+        val site = body.getString("origin")
         val response = JSONObject().put("type", "fill.approved").put("requestId", body.getString("requestId")).put("createdAt", time).put("expiresAt", minOf(body.getLong("expiresAt"), validUntil)).put("origin", site).put("frameOrigin", site).put("accountRef", accountRef).put("otp", otp).put("validFrom", validFrom).put("validUntil", validUntil)
         val outbound = envelope(d, response)
         durable { d.getJSONObject("origins").put(site, accountRef); terminal(d, body.getString("requestId")); append(d, outbound) }

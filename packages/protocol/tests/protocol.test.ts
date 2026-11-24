@@ -47,6 +47,46 @@ function req(): FillRequest {
   };
 }
 describe("authenticated encrypted protocol", () => {
+  it("validates site.query/site.info and binds origin to status", () => {
+    const now = Date.now(),
+      base = { requestId: randomId(), createdAt: now, expiresAt: now + 60000 };
+    expect(validateMessage({ ...base, type: "site.query" }, now).type).toBe(
+      "site.query",
+    );
+    expect(
+      validateMessage(
+        {
+          ...base,
+          type: "site.info",
+          status: "ok",
+          origin: "https://github.com",
+        },
+        now,
+      ),
+    ).toMatchObject({ origin: "https://github.com" });
+    expect(
+      validateMessage({ ...base, type: "site.info", status: "no-site" }, now)
+        .type,
+    ).toBe("site.info");
+    for (const bad of [
+      { ...base, type: "site.info", status: "ok" },
+      {
+        ...base,
+        type: "site.info",
+        status: "no-site",
+        origin: "https://x.com",
+      },
+      { ...base, type: "site.info", status: "ok", origin: "http://x.com" },
+      {
+        ...base,
+        type: "site.info",
+        status: "ok",
+        origin: "https://x.com/path",
+      },
+      { ...base, type: "site.query", extra: 1 },
+    ])
+      expect(() => validateMessage(bad, now)).toThrow();
+  });
   it("authenticates pairing rejection against scanned QR and rejects substituted/expired denial", () => {
     const s = setup();
     const qr: PairQr = {

@@ -35,6 +35,30 @@ class PhoneBridge(context: Context) {
     }
     private fun internalDevices(): List<JSONObject> = (0 until devices.length()).map { devices.getJSONObject(it) }
     @Synchronized fun list(): List<JSONObject> = internalDevices().map { JSONObject(it.toString()) }
+    /** Site answers from browsers, keyed by query requestId: status and optional origin. Memory only. */
+    private val siteAnswers = mutableMapOf<String, Pair<String, String?>>()
+    private val siteQueries = mutableMapOf<String, String>() // requestId -> channel
+
+    /**
+     * Asks every active paired browser which site is open (to prefill a new account's domain).
+     * Returns the query id; answers arrive through refresh() and are read with siteAnswer().
+     */
+    @Synchronized fun querySites(): String {
+        operationToken = RelayClient.foregroundToken()
+        val requestId = randomId(); val time = now()
+        val active = internalDevices().filter { it.optBoolean("active") }
+        require(active.isNotEmpty()) { "No paired browser" }
+        for (d in active) {
+            val body = JSONObject().put("type", "site.query").put("requestId", requestId).put("createdAt", time).put("expiresAt", time + 30000)
+            durable { append(d, envelope(d, body)) }
+            siteQueries[requestId] = d.getString("channelId")
+            runCatching { flush(d) }
+        }
+        return requestId
+    }
+    /** All answers for a query: list of (status, origin) from each browser that replied. */
+    @Synchronized fun siteAnswers(requestId: String): List<Pair<String, String?>> = siteAnswers.filterKeys { it.startsWith("$requestId:") }.values.toList()
+
     @Synchronized fun pendingRequests(): List<Pending> = requests.values.map { Pending(it.channel, JSONObject(it.body.toString())) }
     @Synchronized fun isPending(reviewed: Pending): Boolean = requests[reviewed.key]?.body?.toString() == reviewed.body.toString() && reviewed.body.optLong("expiresAt") > now()
     private fun device(id: String) = internalDevices().firstOrNull { it.getString("channelId") == id } ?: error("Browser was revoked")
@@ -240,6 +264,16 @@ class PhoneBridge(context: Context) {
                 require(requests.values.count { it.channel == channel } < 16) { "Too many pending requests" }
                 durable { seen.put(id, expiry + 300000); requests[pending.key] = pending; val saved = d.optJSONObject("pending") ?: JSONObject().also { d.put("pending", it) }; saved.put(requestId, body) }
                 Telemetry.track("request.pending", "req" to Telemetry.short(requestId), "origin" to site, "hasContext" to body.has("context"))
+            }
+            "site.info" -> {
+                strict(body, common + setOf("status"), setOf("origin"))
+                require(siteQueries.containsKey(requestId)) { "Unexpected site answer" }
+                val status = body.getString("status"); require(status in setOf("ok", "no-permission", "no-site"))
+                val site = body.optString("origin", "").ifEmpty { null }
+                require((status == "ok") == (site != null) && (site == null || origin(site))) { "Invalid site answer" }
+                durable { seen.put(id, expiry + 300000) }
+                siteAnswers["$requestId:$channel"] = status to site
+                Telemetry.track("site.answer", "status" to status)
             }
             "request.cancelled" -> { strict(body, common); require(d.getBoolean("active")); durable { seen.put(id, expiry + 300000); terminal(d, requestId) } }
             "device.revoked" -> { strict(body, common); durable { devices = JSONArray(internalDevices().filter { it.getString("channelId") != channel }); requests.entries.removeAll { it.value.channel == channel } } }

@@ -117,7 +117,13 @@ class Vault(private val context: Context) {
         save(key, existing + fresh.map { AccountRecord(Base64.encodeToString(ByteArray(32).also { b -> SecureRandom().nextBytes(b) }, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING), it) })
         return fresh.size
     }
-    fun add(key: ByteArray, account: TotpAccount) = save(key, accounts(key) + AccountRecord(Base64.encodeToString(ByteArray(32).also { SecureRandom().nextBytes(it) }, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING), Totp.validate(account)))
+    /** Adds one account (with an optional website domain) in a single encrypted write. Returns its id. */
+    fun add(key: ByteArray, account: TotpAccount, domain: String = ""): String {
+        val id = Base64.encodeToString(ByteArray(32).also { SecureRandom().nextBytes(it) }, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+        val normalized = AccountDomain.normalize(domain)
+        save(key, accounts(key) + AccountRecord(id, Totp.validate(account)), summaries().associate { it.id to it.domain } + (id to normalized))
+        return id
+    }
     fun save(key: ByteArray, records: List<AccountRecord>, domains: Map<String, String> = summaries().associate { it.id to it.domain }) {
         val array = JSONArray()
         records.forEach { (id, a) -> array.put(JSONObject().put("id", id).put("label", a.label).put("issuer", a.issuer).put("secret", a.secret).put("algorithm", a.algorithm).put("digits", a.digits).put("period", a.period)) }

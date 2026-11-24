@@ -24,4 +24,14 @@ class TotpTest {
         listOf("otpauth://hotp/test?secret=JBSWY3DPEHPK3PXP", "otpauth://totp/test?secret=INVALID!", "otpauth://totp/test?secret=JBSWY3DPEHPK3PXP&digits=7", "otpauth://totp/test?secret=JBSWY3DPEHPK3PXP&period=0", "otpauth://totp/test?secret=JBSWY3DPEHPK3PXP&secret=JBSWY3DPEHPK3PXP", "otpauth://totp/A:test?secret=JBSWY3DPEHPK3PXP&issuer=B").forEach { uri -> try { Totp.parse(uri); fail("Should reject $uri") } catch (_: IllegalArgumentException) { } }
     }
     @Test fun sameCounterSameCode() { val a = TotpAccount("test", "", "JBSWY3DPEHPK3PXP"); assertEquals(Totp.generate(a, 60), Totp.generate(a, 89)); assertNotEquals(Totp.generate(a, 89), Totp.generate(a, 90)) }
+    @Test fun scannedQrWithoutLabelOrIssuerStillParsesForConfirmScreen() {
+        val bare = Totp.parse("otpauth://totp/?secret=JBSWY3DPEHPK3PXP", lenient = true)
+        assertEquals("", bare.issuer)
+        val withImage = Totp.parse("otpauth://totp/:?secret=JBSWY3DPEHPK3PXP&image=https%3A%2F%2Fx", lenient = true)
+        assertEquals("", withImage.label)
+    }
+    @Test fun storageStillRequiresAName() {
+        try { Totp.validate(TotpAccount("", "", "JBSWY3DPEHPK3PXP")); fail() } catch (_: IllegalArgumentException) { }
+        assertEquals("GitHub", Totp.validate(TotpAccount("", "GitHub", "JBSWY3DPEHPK3PXP")).issuer)
+    }
 }

@@ -225,6 +225,16 @@ export const messageSchema = z.discriminatedUnion("type", [
   z.object({ ...common, type: z.literal("device.revoked") }).strict(),
   z.object({ ...common, type: z.literal("pair.confirm") }).strict(),
   z.object({ ...common, type: z.literal("pair.ready") }).strict(),
+  // Phone asks a paired browser which site is open, to prefill a new account's domain.
+  z.object({ ...common, type: z.literal("site.query") }).strict(),
+  z
+    .object({
+      ...common,
+      type: z.literal("site.info"),
+      status: z.enum(["ok", "no-permission", "no-site"]),
+      origin: origin.optional(),
+    })
+    .strict(),
 ]);
 export type Message = z.infer<typeof messageSchema>;
 export type FillRequest = Extract<Message, { type: "fill.request" }>;
@@ -239,8 +249,15 @@ export function validateMessage(value: unknown, now = Date.now()): Message {
     m.expiresAt - m.createdAt > ttl
   )
     throw new Error("Expired or invalid message lifetime");
-  if ("origin" in m && m.origin !== m.frameOrigin)
+  if ("frameOrigin" in m && m.origin !== m.frameOrigin)
     throw new Error("Cross-origin frames unsupported");
+  if (
+    m.type === "site.info" &&
+    (m.status === "ok") !== (m.origin !== undefined)
+  )
+    throw new Error(
+      "Site answer must carry an origin exactly when status is ok",
+    );
   if (
     m.type === "fill.approved" &&
     (m.validUntil <= m.validFrom ||

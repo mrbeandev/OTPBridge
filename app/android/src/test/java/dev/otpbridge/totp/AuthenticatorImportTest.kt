@@ -65,4 +65,9 @@ class AuthenticatorImportTest {
         val ordered = AuthenticatorImport.orderByPart(listOf(part(2), plain, part(0), part(1)))
         assertEquals(listOf(part(0), part(1), part(2), plain), ordered)
     }
+    @Test fun namelessTextLinesGetPlaceholderNames() {
+        val r = AuthenticatorImport.parseText("otpauth://totp/?secret=JBSWY3DPEHPK3PXP")
+        assertEquals(1, r.entries.size)
+        assertTrue(r.entries[0].account.label.startsWith("Unnamed account"))
+    }
 }

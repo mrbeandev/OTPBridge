@@ -36,8 +36,14 @@ object Totp {
         return out.toString()
     }
 
+    /** Full validation for storage: a stored account must be nameable. */
     fun validate(account: TotpAccount): TotpAccount {
-        require(account.label.isNotBlank() && account.label.length <= 200) { "Account label is required (maximum 200 characters)" }
+        require(account.label.isNotBlank() || account.issuer.isNotBlank()) { "Give the account a name" }
+        return validateSetup(account)
+    }
+    /** Validates everything except the name, so nameless QR codes can reach the confirm screen. */
+    fun validateSetup(account: TotpAccount): TotpAccount {
+        require(account.label.length <= 200) { "Account name is too long (maximum 200 characters)" }
         require(account.issuer.length <= 200) { "Issuer is too long" }
         require(account.algorithm in setOf("SHA1", "SHA256", "SHA512")) { "Unsupported TOTP algorithm" }
         require(account.digits in setOf(6, 8)) { "Only six or eight digits are supported" }
@@ -68,7 +74,7 @@ object Totp {
         val labelIssuer = label.substringBefore(':', "")
         val issuer = params["issuer"] ?: labelIssuer
         if (!lenient) require(labelIssuer.isEmpty() || issuer == labelIssuer) { "Issuer does not match the account label" }
-        return validate(TotpAccount(label.substringAfter(':'), issuer, params["secret"] ?: error("Missing TOTP secret"), params["algorithm"]?.uppercase() ?: "SHA1", params["digits"]?.toIntOrNull() ?: if ("digits" in params) error("Invalid digit count") else 6, params["period"]?.toIntOrNull() ?: if ("period" in params) error("Invalid period") else 30))
+        return validateSetup(TotpAccount(label.substringAfter(':'), issuer, params["secret"] ?: error("Missing TOTP secret"), params["algorithm"]?.uppercase() ?: "SHA1", params["digits"]?.toIntOrNull() ?: if ("digits" in params) error("Invalid digit count") else 6, params["period"]?.toIntOrNull() ?: if ("period" in params) error("Invalid period") else 30))
     }
 
     fun generate(account: TotpAccount, unixSeconds: Long): String {

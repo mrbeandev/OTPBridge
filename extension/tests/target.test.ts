@@ -50,7 +50,8 @@ describe("guarded field insertion", () => {
     // Synthetic events are untrusted and ignored; seed what a real trusted
     // right-click on `b` records.
     const state = (window as any).__otpbridge;
-    state.last = b; state.lastAt = Date.now();
+    state.last = b;
+    state.lastAt = Date.now();
     const t = captureTarget(true, true)!;
     expect(t.how).toBe("remembered");
     expect(fillTarget(t.fieldToken, t.origin, "012345")).toBe(false); // b is not focused

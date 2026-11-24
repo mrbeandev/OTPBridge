@@ -5,13 +5,11 @@ afterEach(() => vi.unstubAllGlobals());
 it("normalizes relay origin and does not redirect bearer credentials", async () => {
   const channel = randomId(),
     token = randomId();
-  const fetchMock = vi
-    .fn()
-    .mockResolvedValue(
-      new Response(JSON.stringify({ messages: [], cursor: 0 }), {
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
+  const fetchMock = vi.fn().mockResolvedValue(
+    new Response(JSON.stringify({ messages: [], cursor: 0 }), {
+      headers: { "Content-Type": "application/json" },
+    }),
+  );
   vi.stubGlobal("fetch", fetchMock);
   await new RelayClient("https://relay.example/", channel, token).poll(0);
   const [url, init] = fetchMock.mock.calls[0]!;

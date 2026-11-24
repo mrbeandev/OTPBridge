@@ -5,6 +5,7 @@ import { normalizeRelay } from "@otpbridge/protocol";
 import { DEFAULT_RELAY } from "../relay-default";
 import "../style.css";
 import { ContextSettings } from "./ContextSettings";
+import { SiteSharing } from "./SiteSharing";
 import { Diagnostics } from "./Diagnostics";
 function App() {
   const [relay, setRelay] = useState(DEFAULT_RELAY),
@@ -217,6 +218,7 @@ function App() {
         )}
       </section>
       <ContextSettings />
+      <SiteSharing />
       <Diagnostics />
       <section aria-live="polite">
         <h2>Status</h2>

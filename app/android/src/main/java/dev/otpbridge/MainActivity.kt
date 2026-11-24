@@ -56,6 +56,10 @@ class MainActivity : FragmentActivity() {
     private var sessionEnabled by mutableStateOf(false)
     private var maskAllCodes by mutableStateOf(false)
     private var diagnosticsOpen by mutableStateOf(false)
+    private var newAccount by mutableStateOf<TotpAccount?>(null)
+    private var newAccountSiteQuery by mutableStateOf<String?>(null)
+    private var newAccountSite by mutableStateOf<String?>(null) // origin from browser
+    private var newAccountSiteState by mutableStateOf("idle") // idle | asking | found | none | many | no-permission | offline
     private var notifState by mutableStateOf("ok") // ok | ask | blocked
     private var notifPromptDismissed by mutableStateOf(false)
     private var editAccount by mutableStateOf<AccountSummary?>(null)
@@ -95,7 +99,7 @@ class MainActivity : FragmentActivity() {
         result.contents?.let { text -> when {
             scanMode == "pair" -> pairQr = text
             scanMode == "import" || text.startsWith("otpauth-migration://", true) -> addImport(text, "transfer QR")
-            else -> { uriInput = text; enrollment = true }
+            else -> openNewAccount(text)
         } }
     }
     private val openImportFile = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -281,11 +285,47 @@ class MainActivity : FragmentActivity() {
         val time = System.currentTimeMillis()
         visibleCodes = visibleCodes + (account.id to VisibleCode(Totp.generate(a, time / 1000), CodeTiming.validUntil(time, a.period)))
     }
-    private fun enroll() {
-        try {
-            val account = Totp.parse(uriInput)
-            vault.unlock(this, "Add ${account.label}", ::error) { key -> vault.add(key, account); loadCatalog(); enrollment = false; uriInput = ""; status = "Account added. Codes stay protected by your fingerprint." }
-        } catch (e: Exception) { error(e.message ?: "Invalid TOTP setup") }
+    private fun enroll() = openNewAccount(uriInput)
+    /** Scanned/pasted otpauth link -> confirm screen. Lenient: real sites send blank labels or extras. */
+    private fun openNewAccount(text: String) {
+        enrollment = false; uriInput = ""
+        val account = try { Totp.parse(text, lenient = true) } catch (e: Exception) { error(e.message ?: "Invalid TOTP setup"); return }
+        startNewAccount(account)
+    }
+    private fun startNewAccount(account: TotpAccount) {
+        newAccount = account; newAccountSite = null; newAccountSiteQuery = null; newAccountSiteState = "idle"
+        if (browsers.none { it.optBoolean("active") }) return
+        newAccountSiteState = "asking"
+        operation {
+            val query = network { bridge!!.querySites() }
+            newAccountSiteQuery = query
+            // Browsers answer within one poll; give them up to ~12 s.
+            repeat(8) {
+                if (newAccountSiteQuery != query) return@operation
+                delay(1500); refresh(false)
+                val answers = bridge!!.siteAnswers(query)
+                val sites = answers.mapNotNull { it.second }.distinct()
+                when {
+                    sites.size == 1 -> { newAccountSite = sites.single(); newAccountSiteState = "found"; return@operation }
+                    sites.size > 1 -> { newAccountSiteState = "many"; newAccountSite = sites.first(); return@operation }
+                    answers.isNotEmpty() && answers.size >= browsers.count { b -> b.optBoolean("active") } ->
+                        { newAccountSiteState = if (answers.any { a -> a.first == "no-permission" }) "no-permission" else "none"; return@operation }
+                }
+            }
+            if (newAccountSiteQuery == query && newAccountSiteState == "asking") newAccountSiteState = "offline"
+        }
+    }
+    private fun saveNewAccount(account: TotpAccount, issuer: String, label: String, domain: String) {
+        val i = issuer.trim(); val l = label.trim()
+        val final = account.copy(issuer = i, label = l.ifBlank { i })
+        authorize("Add ${final.issuer.ifBlank { final.label }}") { key ->
+            val fromBrowser = newAccountSiteState == "found"
+            vault.add(key, final, domain)
+            loadCatalog(); lastSessionStep = null
+            newAccount = null; newAccountSiteQuery = null; newAccountSite = null; newAccountSiteState = "idle"
+            status = "${final.issuer.ifBlank { final.label }} added" + if (domain.isNotBlank()) " and linked to ${dev.otpbridge.vault.AccountDomain.normalize(domain)}." else "."
+            Telemetry.track("account.added", "hasDomain" to domain.isNotBlank(), "domainFromBrowser" to fromBrowser)
+        }
     }
     private fun approve() {
         val request = selectedRequest ?: return; val accountId = selectedAccount ?: return
@@ -317,6 +357,7 @@ class MainActivity : FragmentActivity() {
     }
     @Composable private fun Screen() {
         if (importOpen) { ImportScreen(); return }
+        newAccount?.let { NewAccountScreen(it); return }
         pairQr?.let { qr ->
             PairBrowserScreen(qr)
             return
@@ -523,6 +564,52 @@ class MainActivity : FragmentActivity() {
                 }
                 if (expired) Text("This pairing expired. Remove it and scan a new QR.", Modifier.padding(top = 6.dp, end = 10.dp), style = MaterialTheme.typography.bodySmall)
                 else if (!active && !d.optBoolean("confirmed")) TextButton(enabled = !busy, onClick = { operation { network { bridge!!.confirm(d.getString("channelId")) }; refresh(false) } }) { Text("Finish approved pairing") }
+            }
+        }
+    }
+    @Composable private fun NewAccountScreen(account: TotpAccount) {
+        val cancel = { newAccount = null; newAccountSiteQuery = null; newAccountSite = null; newAccountSiteState = "idle" }
+        BackHandler { cancel() }
+        var issuer by remember(account) { mutableStateOf(account.issuer) }
+        var label by remember(account) { mutableStateOf(account.label) }
+        var domain by remember(account) { mutableStateOf("") }
+        var domainTouched by remember(account) { mutableStateOf(false) }
+        // Browser answer fills the domain unless the user already typed one.
+        LaunchedEffect(newAccountSite) { if (!domainTouched) newAccountSite?.let { domain = dev.otpbridge.vault.AccountDomain.hostOf(it) } }
+        // Suggest a name from the site when the QR had none.
+        LaunchedEffect(newAccountSite) {
+            val host = newAccountSite?.let { dev.otpbridge.vault.AccountDomain.hostOf(it) } ?: return@LaunchedEffect
+            if (issuer.isBlank()) issuer = host.removePrefix("www.").substringBefore('.').replaceFirstChar { it.uppercase() }
+        }
+        val domainError = remember(domain) { runCatching { dev.otpbridge.vault.AccountDomain.normalize(domain) }.exceptionOrNull()?.message }
+        val nameMissing = issuer.isBlank() && label.isBlank()
+        val qrHadName = account.issuer.isNotBlank() || account.label.isNotBlank()
+        Scaffold(
+            topBar = { TopAppBar(title = { Text("New account", style = MaterialTheme.typography.titleMedium) }, navigationIcon = { IconButton(onClick = cancel) { Icon(BridgeIcons.Back, contentDescription = "Cancel") } }) },
+            bottomBar = { Surface(shadowElevation = 4.dp) {
+                Column(Modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(horizontal = 20.dp, vertical = 12.dp)) {
+                    Button(enabled = !nameMissing && domainError == null && !busy, modifier = Modifier.fillMaxWidth(), onClick = { saveNewAccount(account, issuer, label, domain) }) { Text("Save account") }
+                }
+            } }
+        ) { padding ->
+            Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(if (qrHadName) "Check the name before saving." else "This QR didn't include a name. Give the account one so you can recognise it later.", style = MaterialTheme.typography.bodyMedium)
+                OutlinedTextField(issuer, { issuer = it.take(200) }, label = { Text("Service name") }, placeholder = { Text("GitHub") }, singleLine = true, isError = nameMissing, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(label, { label = it.take(200) }, label = { Text("Account") }, placeholder = { Text("you@example.com") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(domain, { domain = it.take(253); domainTouched = true }, label = { Text("Website domain") }, placeholder = { Text("github.com") }, singleLine = true, isError = domainError != null,
+                    supportingText = { Text(domainError ?: when (newAccountSiteState) {
+                        "asking" -> "Asking your browser which site is open…"
+                        "found" -> "Filled from your browser. Change it if it's wrong."
+                        "many" -> "Your browsers are on different sites; check this one."
+                        "no-permission" -> "Turn on “Link new accounts to this website” in the extension settings to fill this automatically."
+                        "none" -> "Your browser isn't on a website right now. Type the domain, or leave it empty."
+                        "offline" -> "Your browser didn't answer. Type the domain, or leave it empty."
+                        else -> "Requests from this site select this account automatically."
+                    }) }, modifier = Modifier.fillMaxWidth())
+                if (newAccountSiteState == "asking") LinearProgressIndicator(Modifier.fillMaxWidth())
+                Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+                    Text("${account.digits}-digit code · every ${account.period}s · ${account.algorithm}" + if (Totp.isWeak(account.secret)) " · short secret" else "", Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
+                }
             }
         }
     }
@@ -760,7 +847,7 @@ class MainActivity : FragmentActivity() {
             }
             Text("There is no vault backup. Keep recovery codes elsewhere.", style = MaterialTheme.typography.bodySmall)
         } }, confirmButton = { TextButton(onClick = {
-            if (uriInput.isNotEmpty()) enroll() else try { val a = Totp.validate(TotpAccount(label, issuer, secret, algorithm, digits.toInt(), period.toInt())); vault.unlock(this@MainActivity, "Add ${a.label}", ::error) { key -> vault.add(key, a); enrollment = false; loadCatalog(); status = "Account added. Codes stay locked." } } catch (e: Exception) { error(e.message ?: "Invalid account") }
+            if (uriInput.isNotEmpty()) enroll() else try { val a = Totp.validate(TotpAccount(label.ifBlank { issuer.ifBlank { "Account" } }, issuer, secret, algorithm, digits.toInt(), period.toInt())); enrollment = false; startNewAccount(a) } catch (e: Exception) { error(e.message ?: "Invalid account") }
         }) { Text("Save with biometrics") } }, dismissButton = { TextButton(onClick = { enrollment = false; uriInput = "" }) { Text("Cancel") } })
     }
     override fun onStart() {
@@ -785,7 +872,7 @@ class MainActivity : FragmentActivity() {
         dev.otpbridge.relay.RelayClient.cancelAll()
         vault.cancel()
         session.lock(); sessionUnlocked = false; visibleCodes = emptyMap(); lastSessionStep = null; tab = 0; selectedRequest = null; selectedAccount = null; deleteAccount = null; accountMenu = null; addMenu = false
-        approveBinding = false; uriInput = ""; enrollment = false; pairQr = null; busy = false; diagnosticsOpen = false; editAccount = null; browserMenu = null; removeBrowser = null; if (scanMode != "import") { importOpen = false; resetImport() }
+        approveBinding = false; uriInput = ""; enrollment = false; pairQr = null; busy = false; diagnosticsOpen = false; newAccount = null; newAccountSiteQuery = null; newAccountSite = null; newAccountSiteState = "idle"; editAccount = null; browserMenu = null; removeBrowser = null; if (scanMode != "import") { importOpen = false; resetImport() }
         super.onStop()
     }
 }

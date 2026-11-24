@@ -35,7 +35,10 @@ object AuthenticatorImport {
                     val r = parseMigration(line); entries += r.entries; skipped += r.skipped.map { it.copy(source = "$where · ${it.source}") }; batch = r.batch ?: batch
                 } catch (e: IllegalArgumentException) { skipped += Skipped(where, e.message ?: "Invalid transfer code") }
                 line.startsWith("otpauth://", ignoreCase = true) -> try {
-                    val a = Totp.parse(line, lenient = true); entries += Entry(a, Totp.isWeak(a.secret))
+                    val parsed = Totp.parse(line, lenient = true)
+                    // Bulk imports have no confirm screen: give nameless entries a visible placeholder to rename later.
+                    val a = if (parsed.label.isBlank() && parsed.issuer.isBlank()) parsed.copy(label = "Unnamed account ($where)") else parsed
+                    entries += Entry(a, Totp.isWeak(a.secret))
                 } catch (e: Exception) { skipped += Skipped(where, friendly(e)) }
                 else -> skipped += Skipped(where, "Not an otpauth link")
             }

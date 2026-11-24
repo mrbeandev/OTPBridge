@@ -29,6 +29,7 @@ import { probeRelay, type RelayHealth } from "./relay-status";
 import { bestEffortContext } from "./request-context";
 import { track, short, readTelemetry, clearTelemetry } from "../telemetry";
 import { createDenial, showDenialDot } from "./denial";
+import { activeSite } from "./site-query";
 async function setDenial(
   s: State,
   kind: "otp" | "pairing",
@@ -294,6 +295,46 @@ async function requestFill(
   await poll(s);
   await save(s);
 }
+/**
+ * Replies to the phone's "which site is open?" question. Answers are best effort and
+ * bound to the query's requestId and deadline; nothing else on the channel changes.
+ */
+async function answerSiteQuery(d: NonNullable<State["device"]>, m: Message) {
+  if (m.type !== "site.query") return;
+  const now = Date.now();
+  const site = await activeSite().catch(() => ({ status: "no-site" as const }));
+  const reply: Message = {
+    type: "site.info",
+    requestId: m.requestId,
+    createdAt: now,
+    expiresAt: Math.min(m.expiresAt, now + REQUEST_TTL),
+    ...site,
+  };
+  try {
+    await client(d).send(encryptMessage(d.channelId, d.keys.tx, reply));
+  } catch (e) {
+    if (!(e instanceof Error) || !e.message.includes("409")) throw e;
+  }
+  track("site.answered", { req: short(m.requestId), status: site.status });
+}
+/** Background check for phone questions while no fill request is pending. */
+async function pollIdle(s: State) {
+  const d = s.device;
+  if (!d || s.pending || s.pairing) return;
+  const batch = await client(d).poll(d.cursor);
+  for (const t of batch.messages) {
+    if (d.seen[t.id]) continue;
+    let m: Message;
+    try {
+      m = decryptMessage(d.channelId, d.keys.rx, t);
+    } catch {
+      continue;
+    }
+    d.seen[t.id] = t.expiresAt + PAIR_TTL;
+    if (m.type === "site.query") await answerSiteQuery(d, m);
+  }
+  d.cursor = batch.cursor;
+}
 async function poll(s: State) {
   clean(s);
   if (s.pairing) {
@@ -352,6 +393,10 @@ async function poll(s: State) {
       delete s.device;
       s.status = "Phone revoked this browser. Pair again.";
       break;
+    }
+    if (m.type === "site.query") {
+      await answerSiteQuery(d, m);
+      continue;
     }
     if (m.requestId !== p.request.requestId) continue;
     track("phone.reply", { req: short(m.requestId), type: m.type });
@@ -503,7 +548,18 @@ async function refreshRelayHealth() {
         };
     if (state.device && permission) {
       try {
-        await client(state.device).poll(state.device.cursor);
+        // One poll per check: detects revoked pairings and answers phone questions.
+        await exclusive(async () => {
+          const current = await load();
+          if (current.device?.channelId !== state.device?.channelId) return;
+          if (current.pending || current.pairing) {
+            // The active request loop already polls and answers.
+            await client(current.device!).poll(current.device!.cursor);
+            return;
+          }
+          await pollIdle(current);
+          await save(current);
+        });
       } catch (error) {
         if (
           error instanceof Error &&

@@ -1,118 +1,117 @@
 # OTPBridge
 
-Phone-approved TOTP autofill for Chrome, with a self-hosted, content-blind Cloudflare relay.
+Fill two-factor codes into Chrome straight from your Android phone. Your authenticator secrets never leave the phone, and you approve every code with your fingerprint.
 
-**Early development — not independently security audited.** Do not migrate important authenticator accounts yet. Native crypto interoperability and data-preserving upgrades have been checked on a physical device; full biometric/lifecycle acceptance is still in progress. Use synthetic test accounts until the release acceptance checklist passes.
+> **Early release, not independently security audited.** Keep your services' recovery codes or another authenticator as a backup. Losing the phone or uninstalling the app loses its vault: there is no cloud sync or backup yet.
+
+## Download
+
+Get the latest files from **[Releases](../../releases/latest)**:
+
+| File                             | What it is                        |
+| -------------------------------- | --------------------------------- |
+| `otpbridge-vX.Y.Z.apk`           | Android app (Android 10+)         |
+| `otpbridge-extension-vX.Y.Z.zip` | Chrome extension                  |
+| `SHA256SUMS.txt`                 | Checksums to verify the downloads |
+
+## Install
+
+**Android app**
+
+1. Download the APK on your phone and open it. Allow installing from your browser/files app when Android asks.
+2. Open OTPBridge and allow notifications, so you're alerted when a browser asks for a code.
+3. Add accounts: tap **+** to scan a site's setup QR, type a setup key, or import from Google Authenticator (its _Transfer accounts_ QR codes, including screenshots) or a `.txt` file of `otpauth://` links.
+
+**Chrome extension**
+
+1. Download and unzip the extension ZIP.
+2. Open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked**, and pick the unzipped folder.
+3. Open the extension's settings. The relay is already filled in; enter a name for this browser and click **Create pairing QR**.
+4. In the app, open **Browsers → Pair a browser**, scan the QR, check the browser details, and tap **Connect**.
+
+## Use it
+
+1. On a login page, right-click the code field and choose **Fill from phone** (or focus it and press **Alt+Shift+O**).
+2. Your phone shows a notification. Tap it: the request opens directly.
+3. The matching account is selected for you when there's only one; otherwise choose. Tap **Send code**.
+4. The code is filled in. The form is never submitted for you, and the toolbar badge shows how many seconds the code stays valid.
+
+## Features
+
+- **Fingerprint-protected vault.** Secrets are encrypted with a key that needs strong biometrics. _Unlock once per visit_ (on by default) asks for one fingerprint per app opening; turn it off to confirm every code.
+- **End-to-end encrypted relay.** The relay only forwards encrypted messages it can't read. Push notifications carry no site, account or code, only "a request is waiting".
+- **Site-aware accounts.** Link an account to its website; requests from that site preselect it. When adding an account, the phone can ask your browser which site is open to fill this in.
+- **Request details.** See the requesting site, browser, approximate location and IP before approving. Each detail can be turned off in the extension settings, except the site.
+- **Imports.** Google Authenticator transfer QR codes (multi-part, from camera or screenshots) and plain-text `otpauth://` exports.
+- **Privacy-safe diagnostics.** Both app and extension keep a local log you can export as a `.txt` file for bug reports. OTP codes, secrets, tokens, IPs, locations, emails and account names are removed before anything is written.
+
+## Reporting bugs
+
+Open an issue and attach the diagnostics reports:
+
+- **App:** _Browsers_ tab → bug icon → **Share report file**.
+- **Extension:** settings → _Diagnostics_ → **Download report (.txt)**.
+
+Never post pairing QR codes, setup QR codes or screenshots showing codes.
 
 ## How it works
 
-1. Right-click a supported OTP input and choose **Fill from phone**, or focus it and press **Alt+Shift+O**.
-2. Manually open the Android app. It fetches pending encrypted requests while foregrounded.
-3. Review the exact website, browser and account, then approve with strong biometrics. **Unlock once per visit** is on by default: one fingerprint on each app opening reveals live codes and lets you explicitly send during that visit without another prompt. Turn it off for a fingerprint on every reveal and send.
-4. Your phone generates one TOTP, encrypts the response, and Chrome fills the original input without submitting. The extension toolbar badge and popup show seconds until that filled code expires.
-
-Home combines accounts and approvals in one compact screen. Incoming requests animate into a section above the account list, pushing accounts down; no separate Requests tab is needed. Account codes reveal inline with live seconds/progress; session mode rotates them automatically. Backgrounding always clears session keys and visible codes, but keeps the mode toggle enabled for the next opening.
-
-**No push service, Firebase, notification permission, Android background service or background phone polling.** TOTP secrets stay on Android. Cloudflare can see network/routing metadata but cannot decrypt application payloads. This does not make TOTP phishing-resistant.
-
-## Request details and connection status
-
-Extension settings let you disable collection of location, public IP, device hints and browser information independently. Requesting website/domain is mandatory. Location collection starts enabled; Chrome requires `geolocation` in the extension's required permissions (it cannot be optional). Turning location off prevents every geolocation call; coordinates include accuracy/time and are not guaranteed GPS. IP uses api.ipify.org through a narrowly scoped required host permission; there is no separate approval button. Turning Public IP off prevents lookup. Any lookup/permission failure falls back to a core domain-only request within a bounded timeout, never blocks OTP sending. Denied/unavailable details are omitted. Nothing tracks location in the background. Update both app and extension to v0.4 before using context (older strict clients reject new fields).
-
-A bottom green icon dot means the configured relay passed a recent `/health` check, not that the phone is online. Checks occur about once per minute in the extension; the numeric OTP countdown remains independent. Restore relay permission appears only if that relay host permission is missing. Existing pairings retain their relay—changing Cloudflare deployments does not migrate them; unpair/re-pair to change relays.
-
-Denied OTP and pairing requests show an explicit popup outcome. An unread denial temporarily overrides the relay icon with a red dot for up to 30 seconds; opening the actual popup acknowledges it immediately and restores the relay icon. The denial explanation remains until another attempt starts. Options-page polling does not acknowledge denials. Pairing rejection is authenticated with the scanned QR bootstrap; closing/backing out is not falsely reported as denial.
-
-Home's eye toggle beside Refresh persists across reopening and masks all account codes, including session-unlocked codes, without changing whether an explicit request can be sent.
-
-## Repository
-
 ```text
-app/                 Native Kotlin / Jetpack Compose Android app (Gradle)
-extension/           Chrome Manifest V3 extension (TypeScript / React)
-worker/              Cloudflare Worker + SQLite Durable Object mailboxes
-packages/protocol/   Versioned protocol, crypto implementation and public test vectors
-tests/               Cross-component browser and relay acceptance checks
-.github/workflows/   Automated build and test checks
+Chrome extension ──encrypted──▶ Cloudflare relay ──push "request waiting"──▶ Android app
+        ▲                                                                    │
+        └────────────────encrypted one-time code (after fingerprint)◀────────┘
 ```
 
-The Android build is independent of pnpm. Protocol fixtures are language-neutral JSON; implementation code is intentionally not shared between Kotlin and TypeScript.
+Pairing exchanges keys through the QR code (libsodium `crypto_kx`); every message is encrypted with XChaCha20-Poly1305. The relay sees only routing metadata such as timing and sizes. Details: [SECURITY.md](SECURITY.md) and the [wire protocol](packages/protocol/spec/wire.md).
 
-## Development
+OTPBridge makes typing codes easier. It does **not** make TOTP phishing-resistant: always check the site shown on your phone before sending.
 
-Requires Node 24, pnpm 10, Java 21 and an Android SDK for the native app.
+## Self-hosting the relay
 
-```sh
-corepack enable
-pnpm install --frozen-lockfile
-pnpm check
-```
-
-`pnpm build` produces `extension/dist` and performs a Worker dry-run. It does **not** deploy anything or test a phone.
-
-### Relay
-
-The extension is preconfigured with the official relay, `https://otpbridge.mrbean.dev`. It only carries end-to-end encrypted messages it cannot read, so most users don't need to change anything.
-
-To self-host instead, remove or replace the `routes` entry for `otpbridge.mrbean.dev` in `worker/wrangler.jsonc`, then deploy:
+The extension defaults to the public relay `https://otpbridge.mrbean.dev`. To run your own on Cloudflare's free plan:
 
 ```sh
+corepack enable && pnpm install --frozen-lockfile
+# Edit worker/wrangler.jsonc: remove or replace the otpbridge.mrbean.dev route, set your own name.
 pnpm --filter @otpbridge/worker exec wrangler login
 pnpm --filter @otpbridge/worker run deploy
 ```
 
-Choose a unique Worker name in `worker/wrangler.jsonc` if needed. The deployment uses a SQLite-backed Durable Object, supported on Cloudflare's free plan. No domain, Firebase project or external database is required. Free quotas still apply; this is not a promise of unlimited free hosting.
+Then enter your Worker URL in the extension settings before pairing.
 
-Visit `https://YOUR-WORKER.workers.dev/health`; it should return `{"ok":true,"protocolVersions":[1]}`. Disable request/body logging in any infrastructure you add. Wrangler CLI telemetry can be disabled using `WRANGLER_SEND_METRICS=false`.
+Push notifications are optional and need a Firebase project. The official app only receives pushes sent with the official project's key, so a self-hosted relay works without notifications unless you also build the app with your own `google-services.json` and set your relay's `FCM_SERVICE_ACCOUNT` secret. Without push, open the app to see waiting requests.
 
-### Install the development extension
+## Building from source
 
-1. Run `pnpm --filter @otpbridge/extension build`.
-2. Open `chrome://extensions`, enable Developer mode, choose **Load unpacked**, and select `extension/dist`.
-3. Open OTPBridge settings. Enter the HTTPS relay origin and a browser name; grant permission for that relay only.
-4. Create a pairing QR. Scan it in the Android app and compare all eight digits on both screens. Confirm **on the phone only** if they match; the extension finishes automatically.
-
-The QR contains one-time secrets. Never share it, capture it in bug reports, or paste it into a web-based QR reader.
-
-With minimal `activeTab` permissions, the **first** context-menu use on a document installs the field-capture listener and asks you to right-click the same input again. This is intentional: guessing the focused field could fill the wrong destination. The keyboard shortcut works on the explicitly focused supported field. Navigating may require granting access again.
-
-### Android
-
-The native application lives under `app/`, with a single module under `app/android/`. See [Android build instructions](<app/README.md>) for SDK setup and deferred device-testing details.
+Requires Node 24, pnpm 10, Java 21 and the Android SDK.
 
 ```sh
-cd app
-./gradlew :android:testDebugUnitTest :android:lintDebug :android:assembleDebug
+pnpm install --frozen-lockfile
+pnpm check                      # typecheck, unit tests, extension + worker builds
+pnpm exec playwright install chromium && pnpm test:browser
+
+cd app && ./gradlew :android:testDebugUnitTest :android:assembleDebug
 ```
 
-The debug APK is produced at `app/android/build/outputs/apk/debug/android-debug.apk`. Building does not install it. Do not use real important accounts until physical-device validation and independent security review are complete.
+- Extension output: `extension/dist`.
+- Debug APK: `app/android/build/outputs/apk/debug/android-debug.apk`.
+- Builds without `app/android/google-services.json` simply have no push.
+- Release builds need your own signing key in `secrets/release-signing.properties`; see `app/android/build.gradle.kts`.
 
-### Browser integration checks
-
-```sh
-pnpm exec playwright install chromium
-pnpm test:browser
+```text
+app/                 Android app (Kotlin, Jetpack Compose)
+extension/           Chrome extension (Manifest V3, TypeScript, React)
+worker/              Cloudflare Worker + Durable Object mailboxes
+packages/protocol/   Shared protocol, crypto and public test vectors
+tests/               Browser integration tests
 ```
 
-The browser suite loads the actual MV3 bundle and exercises encrypted pairing, SAS comparison and authenticated phone-only confirmation, lost-response retries, and guarded filling with a synthetic phone endpoint. Native permission prompts and OS shortcut delivery are simulated only in a disposable extension copy; actual user gestures and Android biometrics remain manual acceptance checks.
+## Limitations
 
-## Supported v1 behavior
+- Ordinary single code inputs on HTTPS sites. Split one-digit-per-box widgets and cross-origin frames are not supported.
+- One phone per browser; a phone can pair several browsers.
+- TOTP only (no HOTP/SMS). Codes are never auto-submitted or copied to the clipboard.
 
-- Exact HTTPS origins and ordinary editable OTP inputs.
-- Split-digit widgets are currently rejected: safe support requires binding every original field before approval. This is deferred rather than guessing destinations.
-- Same-origin frames when Chrome grants access; cross-origin frames are rejected.
-- One paired phone per extension profile; the phone can have multiple paired browsers.
-- Explicit biometric approval for each request; 90-second request expiration.
-- Standard TOTP enrollment QR/manual secrets; not OAuth, SMS, HOTP or Google Authenticator migration QR imports.
+## License
 
-Restricted browser pages, closed shadow roots and arbitrary custom/contenteditable widgets are not supported. There is no auto-submit or clipboard fallback.
-
-## Security and recovery
-
-Read [SECURITY.md](SECURITY.md) and the [wire protocol](packages/protocol/spec/wire.md) before making changes. The relay is replaceable; it is still trusted for availability, not message authenticity or confidentiality. Endpoint compromise is not solved by relay encryption.
-
-**Keep each service's recovery codes or another authenticator.** Losing the phone, uninstalling the app, or invalidating its biometric-backed key can make the local vault unrecoverable. V1 has no secret cloud sync or portable encrypted vault export. Adding a test account does not replace your existing recovery arrangements.
-
-## Project status
-
-Implemented components and deferred checks are tracked in the [release checklist](<RELEASE-CHECKLIST.md>). Local validation currently passes 27 JavaScript tests, 2 Chromium integration tests and 9 Android unit tests, plus TypeScript builds, Android lint and both APK builds. CI is configured but has not been run remotely. A successful build is not proof of real-device biometric behavior or production security. No store release or public hosted relay is included.
+[Apache 2.0](LICENSE)

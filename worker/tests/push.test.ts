@@ -3,9 +3,21 @@ import { Mailbox } from "../src/mailbox";
 import worker from "../src/index";
 import { hash, randomId } from "../src/limits";
 
-// Throwaway RSA key generated for tests only; never a real credential.
-const TEST_KEY =
-  "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCMFFp6YV4CAZrv\nhNmZlZLCssD3JPsRg/To8u/DtbF0ySNVtEB06YIpbXtxPrRahwb8p4qasqZYyDff\nG7yiVwUg7P5J0jMlE6CbYIRc01TUWFSyaqw1Wd4pukWM3bYb37BavSpf07iRMT6Y\n7YAbRvOFoxF4w3JMaSs2bJbfx7Sn7k72HbQT4kQPWIZy+Sh24yYx3/bOULfpOnwE\ncQTNFq2gA3Nlavu1cn1B3Sj21VbdwjUSVrREfN+H+0YJptxCMzrYDqvpZjjRelo0\nNvmu6YFAm1W0byoyw3XXSqUqRoHrtDn8VeXhVFEnZwT+Fk2p1vX37tQ1WiISd0V5\nXkFMQsFhAgMBAAECggEAPj3M9hPNcZbFAShGh7euPlSu6SHFbUL0z40ifBN/hiTZ\nTnuJKGmZLE85SlhSSuc0c47+Rz6aK1jLepcYegmwfbDQTHzZvN+7vU5lgdllF/Un\nrR845XvI+0GJJc5d3ITIF4l2Cp5IpDr9VXYyNeyQyBBs8vvlDY6tZMFbSJOz8emJ\nW146NjDzZCHxJCR+HdxkcFccW+tFcJw5CyIYIE+i4QyzRhPe5eZl2HiYEneoa6jH\npIHhgz2Vdten4Q09ZoLTxRtZ5wMyD0oEMfJiZhf0xJ+Hq83VEk4v4eGbTfe/rCo2\nyPkYwP0mk84xPY/exBl6y47hDPwB44/hTBd6HV5HAQKBgQDA+W+XKhAxamUwV+7Z\nGHorhIdmL0HPkH5ZW0cO7Rk/lxPv/2mauWuXctxPTy5A2W51PP4SZyAvyEmCPNpC\nIVFPsKW5cXkGOUquWTOk5IYsHPiE1dBProBnAkkMtZFFJye48vtRr8ed4XpEyGmC\nhygSlmnw/jf//D3EMTotAH60pwKBgQC51GKHooyAvGTNVM0+eA7v4AW+3yG+d2JP\nU2eKY9w0x9BjucaKHJ0Ew3ukG2rtwljsukGC3+bgzM0QYf5ouVrvldXTgKxGH9D6\nGPxmlGypSJd0f1iEJo3eldZMFORhBgJZw7p+TX0pRyYYcL38eNW4S32+ZiOwuBuk\ne2eKjEEytwKBgDEpWrxwAuAT8uN2A2tbSQR9JuFpeKKgdQ/eqSOsU5pXqsShlQ3N\n3xMeN/IcgfQTcIh9mVym2RRTOibryc6/Hi/nGNE9j09+mQAByZ5gea4TU1zD++XQ\n1vVnJ6UNPI0ZhI0hmdUdqwUVxEhxpi+SryrNFwBGQ437fODWibOdRKpRAoGAPlL4\n6Lyfmt2UgTkbzQO/HrxnsOhtDNBFbI1wgH2VcS5Cue+ootGN5/cYFKYNashvwpWF\nOzuU13hYnlH/XWgtE4WRPWo+XRZ2pCqVHGJTP0NVaID9UvULR8fBI6suHUxCpZB7\nj7i1bY6rPC8zyOVN6I2JEr524eIdg0DQLSt1AmkCgYBm1PEUr2ZRjAcWmw4rwGh3\noNl1Q/9DFMdTM5bYYbKWFvLzrbEfKll7nVvXDvUtmhIzBUiknGyx7uYzT4snuftm\nc76zwcxYt/2AbP/SCq9jBHtS8qbOX3s0kNNgLj5jrPshbVb9unnxGwKvM/1MNKJc\nczskm+qgkh+q2fHb2Ebxrw==\n-----END PRIVATE KEY-----\n";
+// Fresh RSA key per test run; no key material is stored in the repository.
+const { privateKey } = await crypto.subtle.generateKey(
+  {
+    name: "RSASSA-PKCS1-v1_5",
+    modulusLength: 2048,
+    publicExponent: new Uint8Array([1, 0, 1]),
+    hash: "SHA-256",
+  },
+  true,
+  ["sign", "verify"],
+);
+const pkcs8 = new Uint8Array(
+  await crypto.subtle.exportKey("pkcs8", privateKey as CryptoKey),
+);
+const TEST_KEY = `-----BEGIN PRIVATE KEY-----\n${btoa(String.fromCharCode(...pkcs8)).replace(/(.{64})/g, "$1\n")}\n-----END PRIVATE KEY-----\n`;
 const SA = JSON.stringify({
   client_email: "push@test.iam.gserviceaccount.com",
   private_key: TEST_KEY,

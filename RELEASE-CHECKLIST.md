@@ -1,6 +1,14 @@
-# v0.1 development acceptance checklist
+# Release checklist
 
-This is a buildable development implementation, not an audited production release.
+OTPBridge is published as an early, unaudited release. This list records what has been verified automatically and what still needs manual or independent checks.
+
+## Per-release steps
+
+- [ ] `pnpm check` and `pnpm test:browser` pass; `./gradlew :android:testDebugUnitTest :android:lintRelease :android:assembleRelease` passes.
+- [ ] Release APK signed with the project release key (`apksigner verify --print-certs`), versionCode bumped.
+- [ ] Extension `manifest.json` version bumped; ZIP built from `extension/dist`.
+- [ ] `SHA256SUMS.txt` generated for all attached files.
+- [ ] Secret scan of history and tracked files (no keystore, service account, google-services.json, real TOTP secrets).
 
 ## Automated checks completed locally
 
